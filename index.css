@@ -1,0 +1,30 @@
+caption { 
+	display: table-caption;
+	text-align: center;
+	font-weight: bold;
+	font-size: 150%;
+}
+table {
+	border-spacing: 0;
+	border: 1px solid green;
+	border-collapse: collapse;
+}
+TH {
+	background: grey;
+	font-weight: bold;
+	color: white
+}
+TR:nth-child(even) {background: white}
+TR:nth-child(odd) {background: #A7C942}
+td {text-align: right}
+td:nth-child(1) {
+		text-align: left;
+		font-weight: bold
+}
+p {
+    text-indent: 50px;
+}
+.caption {
+	text-align: center;
+	font-weight: bold;
+}
