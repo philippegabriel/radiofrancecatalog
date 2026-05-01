@@ -1,6 +1,13 @@
 .PHONY: dump test
 KEY=$(file < .OpenAPIKey)
-CSVNAME=$(addsuffix .csv,$(notdir $(1)))
+TARGETS:= \
+affaires-sensibles.html \
+lsd-la-serie-documentaire.html \
+les-nuits-de-france-culture.html \
+les-pieds-sur-terre.html \
+le-cours-de-l-histoire.html \
+
+all: $(TARGETS)
 affaires-sensibles.csv:
 	$(eval URL=https://www.radiofrance.fr/franceinter/podcasts/affaires-sensibles)
 	python rf_dump.py --api-key $(KEY) --show-url $(URL) --out  $@
@@ -20,7 +27,4 @@ le-cours-de-l-histoire.csv:
 	echo '<link rel="stylesheet" href="index.css">' > $@
 	python csv2html.py < $< >> $@
 test:
-	@echo $(KEY)
-	$(eval URL=https://www.radiofrance.fr/franceinter/podcasts/affaires-sensibles)
-	@echo $(URL)
-	@echo $(call CSVNAME,$(URL))
+	@echo $(TARGETS)
