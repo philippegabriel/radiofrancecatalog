@@ -6,5 +6,5 @@ import pandas as pd
 import sys
 
 a = pd.read_csv(sys.stdin)
-a.to_html(sys.stdout)
+a.to_html(escape=False,buf=sys.stdout)
 

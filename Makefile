@@ -8,6 +8,15 @@ les-pieds-sur-terre.html \
 le-cours-de-l-histoire.html \
 
 all: $(TARGETS)
+%.db: %.csv
+	sqlite3 $@ < schema.sql
+	sqlite3 $@ ".import --csv --skip 1 $< rf"
+	sqlite3 $@ < addlinktags.sql
+%.db.csv: %.db
+	sqlite3 -init sqlite3.csv.init $< < query.sql > $@
+
+login: lsd-la-serie-documentaire.db
+	sqlite3 -init sqlite3.csv.init lsd-la-serie-documentaire.db
 affaires-sensibles.csv:
 	$(eval URL=https://www.radiofrance.fr/franceinter/podcasts/affaires-sensibles)
 	python rf_dump.py --api-key $(KEY) --show-url $(URL) --out  $@
@@ -23,8 +32,15 @@ les-pieds-sur-terre.csv:
 le-cours-de-l-histoire.csv:
 	$(eval URL=https://www.radiofrance.fr/franceculture/podcasts/le-cours-de-l-histoire)
 	python rf_dump.py --api-key $(KEY) --show-url $(URL) --out  $@
-%.html: %.csv
+%.html: %.db.csv
 	echo '<link rel="stylesheet" href="index.css">' > $@
 	python csv2html.py < $< >> $@
 test:
 	@echo $(TARGETS)
+	@echo $(addsuffix .db,$(basename $(TARGETS)))
+	@echo $(addsuffix .db.csv,$(basename $(TARGETS)))
+clean:
+	rm -rf $(TARGETS)
+	rm -rf $(addsuffix .db,$(basename $(TARGETS)))
+	rm -rf $(addsuffix .db.csv,$(basename $(TARGETS)))
+
