@@ -6,6 +6,7 @@ lsd-la-serie-documentaire.html \
 les-nuits-de-france-culture.html \
 les-pieds-sur-terre.html \
 le-cours-de-l-histoire.html \
+mecanique-du-journalisme.html
 
 all: $(TARGETS)
 %.db: %.csv
@@ -31,6 +32,9 @@ les-pieds-sur-terre.csv:
 	python rf_dump.py --api-key $(KEY) --show-url $(URL) --out  $@
 le-cours-de-l-histoire.csv:
 	$(eval URL=https://www.radiofrance.fr/franceculture/podcasts/le-cours-de-l-histoire)
+	python rf_dump.py --api-key $(KEY) --show-url $(URL) --out  $@
+mecanique-du-journalisme.csv:
+	$(eval URL=https://www.radiofrance.fr/franceculture/podcasts/mecaniques-du-journalisme)
 	python rf_dump.py --api-key $(KEY) --show-url $(URL) --out  $@
 %.html: %.db.csv
 	echo '<link rel="stylesheet" href="index.css">' > $@
