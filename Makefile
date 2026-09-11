@@ -22,11 +22,11 @@ login: lsd-la-serie-documentaire.db
 	sqlite3 -init sqlite3.csv.init lsd-la-serie-documentaire.db
 
 $(addsuffix .csv,$(FIPODCASTS)):
-	python rf_dump.py --api-key $(KEY) --show-url $(FI_URL)/$(@:.csv=) --page-size 100 --no-sleep --out $@
+	python rf_dump.py --api-key $(KEY) --show-url $(FI_URL)/$(@:.csv=) --out $@
 
 
 $(addsuffix .csv,$(FCPODCASTS)):
-	python rf_dump.py --api-key $(KEY) --show-url $(FC_URL)/$(@:.csv=) --page-size 100 --no-sleep --out $@
+	python rf_dump.py --api-key $(KEY) --show-url $(FC_URL)/$(@:.csv=) --out $@
 
 %.html: %.db.csv
 	echo '<link rel="stylesheet" href="index.css">' > $@
