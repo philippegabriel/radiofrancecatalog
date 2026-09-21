@@ -16,7 +16,7 @@ CODS:= $(addsuffix .cutOffDate, $(FIPODCASTS) $(FCPODCASTS))
 CACHEDCSVS := $(addprefix .cache/,$(CSVS))
 all: $(CACHEDCSVS) $(CODS) $(TARGETS)
 
-$(CACHEDCSVS):
+.cache/%.csv:
 	mkdir -p .cache/
 	wget -nc -q $(GITHUBPAGE)/$(notdir $@) -O $@ || touch $@
 
