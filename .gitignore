@@ -1,4 +1,5 @@
 *.csv
 *.html
 *.db
-.OpenAPIKey
+*.OpenAPIKey
+*.cutOffDate
