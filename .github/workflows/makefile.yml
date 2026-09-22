@@ -33,7 +33,6 @@ jobs:
           mkdir site
           cp *.html site/
           cp *.csv site/
-          cp *.db site/
           cp index.css site/
           cp *.webp site/
 

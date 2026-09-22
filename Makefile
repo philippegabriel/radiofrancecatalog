@@ -11,39 +11,49 @@ FCPODCASTS := \
 	mecaniques-du-journalisme
 GITHUBPAGE := https://philippegabriel.github.io/radiofrancecatalog
 PODCASTS:= $(FIPODCASTS) $(FCPODCASTS)
-TARGETS:= $(addsuffix .html, $(PODCASTS))
 CSVS:= $(addsuffix .csv, $(PODCASTS))
+RFCSVS:= $(addsuffix .rf.csv, $(PODCASTS))
 DBS:= $(addsuffix .db, $(PODCASTS))
 CODS:= $(addsuffix .cutOffDate, $(PODCASTS))
 CACHEDDBS := $(addprefix .cache/,$(DBS))
-all: $(CACHEDDBS) $(CODS) $(TARGETS)
+CACHEDCSVS := $(addprefix .cache/,$(CSVS))
+TARGETS:= $(CSVS) $(addsuffix .html, $(PODCASTS)) 
+all: $(CACHEDCSVS) $(CACHEDDBS) $(CODS) $(TARGETS)
 
-.cache/%.db:
+.cache/%.csv:
 	mkdir -p .cache/
-	wget -nc -q $(GITHUBPAGE)/$(notdir $@) -O $@ || sqlite3 $@ < schema.sql
+	wget -nc -q $(GITHUBPAGE)/$(notdir $@) -O $@ || touch $@
+
+.cache/%.db: .cache/%.csv
+	mkdir -p .cache/
+	sqlite3 $@ ".read schema.sql"
+	sqlite3 $@ ".import --csv --skip 1 $^ rf"
 
 %.cutOffDate: .cache/%.db
 	sqlite3 $< < cutoffdate.sql > $@
 
-%.db: .cache/%.db %.csv
+%.db: .cache/%.db %.rf.csv
 	cp $< $@
 	sqlite3 $@ ".import --csv --skip 1 $(word $(words $^),$^) rf"
 
 %.db.csv: %.db
 	sqlite3 -init sqlite3.csv.init $< < query.sql > $@
 
+%.csv: %.db
+	sqlite3 -init sqlite3.csv.init $<  "select * from rf;" > $@
+
 login: le-cours-de-l-histoire.db
 	sqlite3 -init sqlite3.csv.init le-cours-de-l-histoire.db
 
-$(addsuffix .csv,$(FIPODCASTS)): %.csv: %.cutOffDate
+$(addsuffix .rf.csv,$(FIPODCASTS)): %.rf.csv: %.cutOffDate
 	$(eval since := $(shell cat  $<))
 	@echo fetching $@ since $(since) ...
-	python rf_dump.py --api-key $(KEY) --since $(since) --show-url $(FI_URL)/$(@:.csv=) --out $@
+	python rf_dump.py --api-key $(KEY) --since $(since) --show-url $(FI_URL)/$(@:.rf.csv=) --out $@
 
-$(addsuffix .csv,$(FCPODCASTS)): %.csv: %.cutOffDate
+$(addsuffix .rf.csv,$(FCPODCASTS)): %.rf.csv: %.cutOffDate
 	$(eval since := $(shell cat $<))
 	@echo fetching $@ since $(since) ...
-	python rf_dump.py --api-key $(KEY) --since $(since) --show-url $(FC_URL)/$(@:.csv=) --out $@
+	python rf_dump.py --api-key $(KEY) --since $(since) --show-url $(FC_URL)/$(@:.rf.csv=) --out $@
 
 %.html: %.db.csv
 	echo '<link rel="stylesheet" href="index.css">' > $@
@@ -54,9 +64,9 @@ test:
 	rm -rf $(TARGETS)
 
 clean:
-	rm -rf $(TARGETS) $(CSVS) $(CODS) $(DBS)
+	rm -rf $(TARGETS) $(RFCSVS) $(CSVS) $(CODS) $(DBS) $(CACHEDDBS)
 
 reallyclean: clean
-	rm -rf $(CACHEDDBS)
+	rm -rf $(CACHEDCSVS)
 
 
