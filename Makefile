@@ -15,12 +15,8 @@ TARGETS:= $(addsuffix .html, $(PODCASTS))
 CSVS:= $(addsuffix .csv, $(PODCASTS))
 DBS:= $(addsuffix .db, $(PODCASTS))
 CODS:= $(addsuffix .cutOffDate, $(PODCASTS))
-CACHEDDBS := $(addprefix .cache/,$(CSVS))
-all: $(CACHEDBS) $(CODS) $(TARGETS)
-
-.cache/%.csv:
-	mkdir -p .cache/
-	wget -nc -q $(GITHUBPAGE)/$(notdir $@) -O $@ || touch $@
+CACHEDDBS := $(addprefix .cache/,$(DBS))
+all: $(CACHEDDBS) $(CODS) $(TARGETS)
 
 .cache/%.db:
 	mkdir -p .cache/
@@ -52,6 +48,7 @@ $(addsuffix .csv,$(FCPODCASTS)): %.csv: %.cutOffDate
 %.html: %.db.csv
 	echo '<link rel="stylesheet" href="index.css">' > $@
 	python csv2html.py < $< >> $@
+
 test: $(CODS) $(CSVS) $(DBS)
 
 clean:
@@ -59,6 +56,6 @@ clean:
 	rm -rf $(addsuffix .db.csv,$(basename $(TARGETS)))
 
 reallyclean: clean
-	rm -rf $(CACHEDCSVS) 
+	rm -rf $(CACHEDDBS)
 
 
