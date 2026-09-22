@@ -12,7 +12,8 @@ table {
 TH {
 	background: grey;
 	font-weight: bold;
-	color: white
+	color: white;
+	text-align: center;
 }
 TR:nth-child(even) {background: white}
 TR:nth-child(odd) {background: #A7C942}

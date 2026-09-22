@@ -35,6 +35,7 @@ jobs:
           cp *.csv site/
           cp *.db site/
           cp index.css site/
+          cp *.webp site/
 
       - name: Check site contents
         run: ls -la site

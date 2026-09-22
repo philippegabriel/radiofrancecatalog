@@ -6,4 +6,5 @@
 * https://www.radiofrance.fr/franceculture/podcasts/les-nuits-de-france-culture
 * https://www.radiofrance.fr/franceculture/podcasts/les-pieds-sur-terre
 * https://www.radiofrance.fr/franceculture/podcasts/le-cours-de-l-histoire
+* https://www.radiofrance.fr/franceculture/podcasts/mecaniques-du-journalisme
 

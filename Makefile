@@ -47,13 +47,14 @@ $(addsuffix .csv,$(FCPODCASTS)): %.csv: %.cutOffDate
 
 %.html: %.db.csv
 	echo '<link rel="stylesheet" href="index.css">' > $@
+	echo '<img src="Logo_Radio_France.svg.webp" alt="Radio France">' >> $@
 	python csv2html.py < $< >> $@
 
-test: $(CODS) $(CSVS) $(DBS)
+test:
+	rm -rf $(TARGETS)
 
 clean:
 	rm -rf $(TARGETS) $(CSVS) $(CODS) $(DBS)
-	rm -rf $(addsuffix .db.csv,$(basename $(TARGETS)))
 
 reallyclean: clean
 	rm -rf $(CACHEDDBS)
