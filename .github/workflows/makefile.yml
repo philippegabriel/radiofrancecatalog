@@ -33,6 +33,7 @@ jobs:
           mkdir site
           cp *.html site/
           cp *.csv site/
+          cp *.db site/
           cp index.css site/
 
       - name: Check site contents
