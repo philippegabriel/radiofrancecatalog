@@ -7,4 +7,6 @@
 * https://www.radiofrance.fr/franceculture/podcasts/les-pieds-sur-terre
 * https://www.radiofrance.fr/franceculture/podcasts/le-cours-de-l-histoire
 * https://www.radiofrance.fr/franceculture/podcasts/mecaniques-du-journalisme
+## Worflow
+![code workflow](docs/workflow.svg)
 

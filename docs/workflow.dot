@@ -1,0 +1,29 @@
+digraph finite_state_machine {
+	fontname="Helvetica,Arial,sans-serif"
+	node [fontname="Helvetica,Arial,sans-serif"]
+	edge [fontname="Helvetica,Arial,sans-serif"]
+	node [color=lightblue2, style=filled];
+    pubCSV [label="https://philippegabriel.github.io/radiofrancecatalog/foo.csv"];
+    cachedCSV [label=".cache/foo.csv"];
+    schema [label="schema.sql"];
+    cachedDB [label=".cache/foo.db"];
+    COD [label="./foo.cutOffDate"];
+    rfCSV [label="./foo.rf.csv"];
+    DB [label="./foo.db"];
+    CSV [label="./foo.csv"];
+    DBCSV [label="./foo.db.csv"];
+    HTML [label="./foo.html"];
+    URL [label="https://philippegabriel.github.io/radiofrancecatalog/foo.html"];
+	pubCSV -> cachedCSV [label = "wget fetch"];
+    schema -> cachedDB;
+	cachedCSV -> cachedDB [label = "sqlite init"];
+	cachedDB -> COD [label = "select max(published_ts)"];
+	COD -> rfCSV [label = "rf_dump.py"];
+	cachedDB -> DB [label = "copy"];
+	rfCSV -> DB [label = "update with latest records"];
+    DB -> DBCSV [label="sqlite query.sql"];
+    DBCSV -> HTML [label="csv2html.py (Pandas)"];
+    DB -> CSV [label="select all, dump as csv"];
+    HTML -> URL [label="github actions upload-pages-artifact"];
+    CSV -> pubCSV [label="github actions upload-pages-artifact"];
+}
