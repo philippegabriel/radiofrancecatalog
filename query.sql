@@ -3,4 +3,5 @@ select
     title,
     description,
     web_url as "Web URL"
-from rf_html;
+from rf_html
+ORDER BY published_ts;

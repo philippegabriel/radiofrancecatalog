@@ -26,6 +26,7 @@ all: $(CACHEDCSVS) $(CACHEDDBS) $(CODS) $(TARGETS)
 
 .cache/%.db: .cache/%.csv
 	mkdir -p .cache/
+	rm -f $@
 	sqlite3 $@ ".read schema.sql"
 	sqlite3 $@ ".import --csv --skip 1 $^ rf"
 
@@ -40,7 +41,7 @@ all: $(CACHEDCSVS) $(CACHEDDBS) $(CODS) $(TARGETS)
 	sqlite3 -init sqlite3.csv.init $< < query.sql > $@
 
 %.csv: %.db
-	sqlite3 -init sqlite3.csv.init $<  "select * from rf;" > $@
+	sqlite3 -init sqlite3.csv.init $<  "select * from rf ORDER BY published_ts;" > $@
 
 login: le-cours-de-l-histoire.db
 	sqlite3 -init sqlite3.csv.init le-cours-de-l-histoire.db
