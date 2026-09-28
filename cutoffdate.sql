@@ -1,9 +1,9 @@
 SELECT COALESCE(
-    strftime(
-        '%Y-%m-%dT%H:%M:%S+00:00',
-        MAX(published_ts),
-        'unixepoch'
+    to_char(
+        to_timestamp(MAX(published_ts)),
+        'YYYY-MM-DD"T"HH24:MI:SSOF'
     ),
     '1900-01-01T00:00:00+00:00'
 )
-FROM rf;
+FROM rf
+WHERE show = :'show';

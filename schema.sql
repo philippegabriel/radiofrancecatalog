@@ -1,6 +1,7 @@
-CREATE TABLE rf (
-published_iso	text,
-published_ts	integer,
+CREATE TABLE IF NOT EXISTS rf (
+show text NOT NULL,
+published_iso	timestamptz,
+published_ts	bigint,
 title	text,
 description	text,
 web_url	text,
@@ -9,9 +10,9 @@ podcast_url	text,
 player_url	text,
 id text PRIMARY KEY);
 
-DROP VIEW IF EXISTS rf_html;
-CREATE VIEW rf_html AS
+CREATE OR REPLACE VIEW rf_html AS
 SELECT
+    show,
     published_iso,
     published_ts,
     title,

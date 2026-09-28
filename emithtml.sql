@@ -1,0 +1,8 @@
+select 
+    date(published_iso) as date,
+    title,
+    description,
+    web_url as "Web URL"
+FROM rf_html
+WHERE show = :'show'
+ORDER BY published_ts;

@@ -6,6 +6,7 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -121,6 +122,9 @@ def gql_post(session, api_key, query, variables):
 
     return payload["data"]
 
+def show_name(show_url):
+    return urlparse(show_url).path.rstrip("/").rsplit("/", 1)[-1]
+
 
 def fetch_all(
     api_key,
@@ -168,6 +172,7 @@ def fetch_all(
                 continue
 
             yield {
+                "show": show_name(show_url),
                 "id": node.get("id", ""),
                 "title": node.get("title", "") or "",
                 "description": node.get("standFirst", "") or "",
@@ -279,6 +284,7 @@ def main():
     )
 
     fieldnames = [
+        "show",
         "published_iso",
         "published_ts",
         "title",
