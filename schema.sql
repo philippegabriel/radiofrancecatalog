@@ -23,3 +23,14 @@ SELECT
     '<a href="' || player_url || '">player url</a>' AS player_url,
     id
 FROM rf;
+
+CREATE TABLE IF NOT EXISTS transcript_segment (
+    episode_id  TEXT NOT NULL REFERENCES rf(id),
+    seq         INTEGER NOT NULL,
+    start_time  DOUBLE PRECISION NOT NULL,
+    end_time    DOUBLE PRECISION NOT NULL,
+    speaker     TEXT,
+    text        TEXT NOT NULL,
+
+    PRIMARY KEY (episode_id, seq)
+);

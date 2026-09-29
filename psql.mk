@@ -63,15 +63,25 @@ $(addsuffix .rf.csv,$(FCPODCASTS)): %.rf.csv: %.cutOffDate
 	echo '<img src="Logo_Radio_France.svg.webp" alt="Radio France">' >> $@
 	python csv2html.py < $< >> $@
 
-test:
+.cache/transcripts/%.csv: transcripts/%.json
+	@mkdir -p $(@D)
+	./transcript_json_to_csv.py $< > $@
+
+.cache/transcripts/%.db: .cache/transcripts/%.csv inserttranscript.sql
+	cat $< | $(PSQL) \
+	    -v episode_id=$* \
+	    -f inserttranscript.sql
+	@touch $@
+
+test: .cache/transcripts/02440fbb-a2c2-4bee-a92a-8e85fe795251_5.db
 	@echo test
 
 resetdb:
 	psql -U pgabriel template1 -f droptables.sql
 	rm -f .cache/*.db *.db
 clean: resetdb
-	rm -rf $(TARGETS) $(RFCSVS) $(CSVS) $(CODS) $(DBS) $(CACHEDDBS)
+	rm -rf $(TARGETS) $(RFCSVS) $(CSVS) $(CODS) $(DBS) $(CACHEDDBS) .cache/transcripts
 reallyclean: clean
-	rm -rf $(CACHEDCSVS)
+	rm -rf $(CACHEDCSVS) 
 
 
