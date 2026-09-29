@@ -18,7 +18,11 @@ CODS:= $(addsuffix .cutOffDate, $(PODCASTS))
 CACHEDDBS := $(addprefix .cache/,$(DBS))
 CACHEDCSVS := $(addprefix .cache/,$(CSVS))
 TARGETS:= $(CSVS) $(addsuffix .html, $(PODCASTS))
-PSQL := psql -X -v ON_ERROR_STOP=1 -U pgabriel template1
+PSQL := psql -X -v ON_ERROR_STOP=1 -U pgabriel radiofrance
+TRCSVS:=$(addsuffix .csv,$(addprefix .cache/transcripts/,$(basename $(shell ls ./transcripts/))))
+TRCDBS:=$(subst .csv,.db, $(TRCSVS))
+CHUNKCSVS:=$(addsuffix .csv,$(addprefix .cache/chunks/,$(basename $(shell ls ./transcripts/))))
+CHUNKDBS:=$(subst .csv,.db, $(CHUNKCSVS))
 all: $(CACHEDCSVS) $(CACHEDDBS) $(CODS) $(TARGETS)
 
 .cache/%.csv:
@@ -73,14 +77,32 @@ $(addsuffix .rf.csv,$(FCPODCASTS)): %.rf.csv: %.cutOffDate
 	    -f inserttranscript.sql
 	@touch $@
 
-test: .cache/transcripts/02440fbb-a2c2-4bee-a92a-8e85fe795251_5.db
-	@echo test
+.cache/chunks/%.csv: transcripts/%.json chunk_json_to_csv.py
+	@mkdir -p $(dir $@)
+	python chunk_json_to_csv.py $< > $@
+
+.cache/chunks/%.db: .cache/chunks/%.csv insertchunks.sql
+	cat $< | $(PSQL) \
+	    -v episode_id=$* \
+	    -f insertchunks.sql
+	@touch $@
+
+
+tr: $(TRCSVS) $(TRCDBS)
+	@echo transcripts uploaded
+
+chunks: $(CHUNKCSVS) $(CHUNKDBS)
+	@echo chunks uploaded 
+
+test:
+	$(PSQL) < inventory.sql
 
 resetdb:
-	psql -U pgabriel template1 -f droptables.sql
-	rm -f .cache/*.db *.db
+	$(PSQL) -f droptables.sql
+	rm -f .cache/*.db *.db .cache/transcripts/*.db .cache/chunks/*.db
 clean: resetdb
-	rm -rf $(TARGETS) $(RFCSVS) $(CSVS) $(CODS) $(DBS) $(CACHEDDBS) .cache/transcripts
+	rm -rf $(TARGETS) $(RFCSVS) $(CSVS) $(CODS) $(DBS) $(CACHEDDBS) 
+	rm -rf .cache/transcripts .cache/chunks
 reallyclean: clean
 	rm -rf $(CACHEDCSVS) 
 

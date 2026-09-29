@@ -1,3 +1,4 @@
+CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS rf (
 show text NOT NULL,
 published_iso	timestamptz,
@@ -33,4 +34,20 @@ CREATE TABLE IF NOT EXISTS transcript_segment (
     text        TEXT NOT NULL,
 
     PRIMARY KEY (episode_id, seq)
+);
+CREATE TABLE IF NOT EXISTS semantic_chunk (
+    episode_id      TEXT NOT NULL REFERENCES rf(id),
+    chunk_no        INTEGER NOT NULL,
+
+    start_seq       INTEGER NOT NULL,
+    end_seq         INTEGER NOT NULL,
+
+    start_time      DOUBLE PRECISION NOT NULL,
+    end_time        DOUBLE PRECISION NOT NULL,
+
+    text            TEXT NOT NULL,
+
+    embedding       vector(384),
+
+    PRIMARY KEY (episode_id, chunk_no)
 );
