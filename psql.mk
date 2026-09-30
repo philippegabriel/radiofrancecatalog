@@ -1,4 +1,4 @@
-.PHONY: dump test login resetdb clean reallyclean
+.PHONY: dump test login resetdb clean reallyclean tr chunks query
 KEY=$(file < .OpenAPIKey)
 FC_URL := https://www.radiofrance.fr/franceculture/podcasts
 FI_URL := https://www.radiofrance.fr/franceinter/podcasts
@@ -23,6 +23,8 @@ TRCSVS:=$(addsuffix .csv,$(addprefix .cache/transcripts/,$(basename $(shell ls .
 TRCDBS:=$(subst .csv,.db, $(TRCSVS))
 CHUNKCSVS:=$(addsuffix .csv,$(addprefix .cache/chunks/,$(basename $(shell ls ./transcripts/))))
 CHUNKDBS:=$(subst .csv,.db, $(CHUNKCSVS))
+EMBEDCSVS:=$(addsuffix .csv,$(addprefix .cache/embeddings/,$(basename $(shell ls ./transcripts/))))
+EMBEDBS:=$(subst .csv,.db, $(EMBEDCSVS))
 all: $(CACHEDCSVS) $(CACHEDDBS) $(CODS) $(TARGETS)
 
 .cache/%.csv:
@@ -87,23 +89,35 @@ $(addsuffix .rf.csv,$(FCPODCASTS)): %.rf.csv: %.cutOffDate
 	    -f insertchunks.sql
 	@touch $@
 
+embeddings: $(CHUNKCSVS)
+	python chunk_to_embeddings.py --hftoken .hftoken --output-dir .cache/embeddings $^
+
+.cache/embeddings/%.db: .cache/embeddings/%.csv insertembeddings.sql
+	cat $< | $(PSQL) \
+	    -v episode_id=$* \
+	    -f insertembeddings.sql
+	@touch $@
+
 
 tr: $(TRCSVS) $(TRCDBS)
 	@echo transcripts uploaded
-
 chunks: $(CHUNKCSVS) $(CHUNKDBS)
 	@echo chunks uploaded 
+uploadembeds: $(EMBEDBS)
+	echo uploaded all embeddings
+
+query:
+	$(eval querytext:= "Général de Gaulle")
+	@$(eval queryvector:=$(shell python query_to_embedding.py --hftoken .hftoken $(querytext)))
+	@$(PSQL) -v queryvector=$(queryvector) < query.sql
 
 test:
 	$(PSQL) < inventory.sql
 
 resetdb:
 	$(PSQL) -f droptables.sql
-	rm -f .cache/*.db *.db .cache/transcripts/*.db .cache/chunks/*.db
+	rm -f $(DBS) $(CACHEDDBS) .cache/transcripts/*.db .cache/chunks/*.db .cache/embeddings/*.db
 clean: resetdb
-	rm -rf $(TARGETS) $(RFCSVS) $(CSVS) $(CODS) $(DBS) $(CACHEDDBS) 
-	rm -rf .cache/transcripts .cache/chunks
+	rm -rf $(TARGETS) $(RFCSVS) $(CSVS) $(CODS) 
 reallyclean: clean
-	rm -rf $(CACHEDCSVS) 
-
-
+	rm -rf $(CACHEDCSVS)
