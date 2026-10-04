@@ -10,3 +10,5 @@
 ## Worflow
 ![code workflow](docs/workflow.svg)
 
+An episode-partitioned [Dagster pilot](docs/dagster.md) orchestrates existing
+transcripts, chunks, embeddings and PostgreSQL imports without relying on file timestamps.

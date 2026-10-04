@@ -15,33 +15,33 @@ CSVS:= $(addsuffix .csv, $(PODCASTS))
 RFCSVS:= $(addsuffix .rf.csv, $(PODCASTS))
 DBS:= $(addsuffix .db, $(PODCASTS))
 CODS:= $(addsuffix .cutOffDate, $(PODCASTS))
-CACHEDDBS := $(addprefix .cache/,$(DBS))
-CACHEDCSVS := $(addprefix .cache/,$(CSVS))
+CACHEDDBS := $(addprefix data/,$(DBS))
+CACHEDCSVS := $(addprefix data/,$(CSVS))
 TARGETS:= $(CSVS) $(addsuffix .html, $(PODCASTS))
 PSQL := psql -X -v ON_ERROR_STOP=1 -U pgabriel radiofrance
-TRCSVS:=$(addsuffix .csv,$(addprefix .cache/transcripts/,$(basename $(shell ls ./transcripts/))))
+TRCSVS:=$(addsuffix .csv,$(addprefix data/transcripts/,$(basename $(shell ls ./transcripts/))))
 TRCDBS:=$(subst .csv,.db, $(TRCSVS))
-CHUNKCSVS:=$(addsuffix .csv,$(addprefix .cache/chunks/,$(basename $(shell ls ./transcripts/))))
+CHUNKCSVS:=$(addsuffix .csv,$(addprefix data/chunks/,$(basename $(shell ls ./transcripts/))))
 CHUNKDBS:=$(subst .csv,.db, $(CHUNKCSVS))
-EMBEDCSVS:=$(addsuffix .csv,$(addprefix .cache/embeddings/,$(basename $(shell ls ./transcripts/))))
+EMBEDCSVS:=$(addsuffix .csv,$(addprefix data/embeddings/,$(basename $(shell ls ./transcripts/))))
 EMBEDBS:=$(subst .csv,.db, $(EMBEDCSVS))
 all: $(CACHEDCSVS) $(CACHEDDBS) $(CODS) $(TARGETS)
 
-.cache/%.csv:
-	mkdir -p .cache/
+data/%.csv:
+	mkdir -p data/
 	wget -nc -q $(GITHUBPAGE)/$(notdir $@) -O $@ || touch $@
 
-.cache/%.db: .cache/%.csv
-	mkdir -p .cache/
+data/%.db: data/%.csv
+	mkdir -p data/
 	rm -f $@
 	$(PSQL) -f schema.sql
 	$(PSQL)  -c "\copy rf FROM $< DELIMITER ',' CSV HEADER"
 	touch $@
 
-%.cutOffDate: .cache/%.db
+%.cutOffDate: data/%.db
 	$(PSQL) --tuples-only -v show=$* -f cutoffdate.sql -o $@
 
-%.db: %.rf.csv .cache/%.db
+%.db: %.rf.csv data/%.db
 	$(PSQL) -c "\copy rf FROM $< DELIMITER ',' CSV HEADER"
 	touch $@
 
@@ -69,30 +69,30 @@ $(addsuffix .rf.csv,$(FCPODCASTS)): %.rf.csv: %.cutOffDate
 	echo '<img src="Logo_Radio_France.svg.webp" alt="Radio France">' >> $@
 	python csv2html.py < $< >> $@
 
-.cache/transcripts/%.csv: transcripts/%.json
+data/transcripts/%.csv: transcripts/%.json
 	@mkdir -p $(@D)
-	./transcript_json_to_csv.py $< > $@
+	./transcript_json_to_csv.py $< --output $@
 
-.cache/transcripts/%.db: .cache/transcripts/%.csv inserttranscript.sql
+data/transcripts/%.db: data/transcripts/%.csv inserttranscript.sql
 	cat $< | $(PSQL) \
 	    -v episode_id=$* \
 	    -f inserttranscript.sql
 	@touch $@
 
-.cache/chunks/%.csv: transcripts/%.json chunk_json_to_csv.py
+data/chunks/%.csv: transcripts/%.json chunk_json_to_csv.py
 	@mkdir -p $(dir $@)
 	python chunk_json_to_csv.py $< > $@
 
-.cache/chunks/%.db: .cache/chunks/%.csv insertchunks.sql
+data/chunks/%.db: data/chunks/%.csv insertchunks.sql
 	cat $< | $(PSQL) \
 	    -v episode_id=$* \
 	    -f insertchunks.sql
 	@touch $@
 
 embeddings: $(CHUNKCSVS)
-	python chunk_to_embeddings.py --hftoken .hftoken --output-dir .cache/embeddings $^
+	python chunk_to_embeddings.py --hftoken .hftoken --output-dir data/embeddings $^
 
-.cache/embeddings/%.db: .cache/embeddings/%.csv insertembeddings.sql
+data/embeddings/%.db: data/embeddings/%.csv insertembeddings.sql
 	cat $< | $(PSQL) \
 	    -v episode_id=$* \
 	    -f insertembeddings.sql
@@ -105,9 +105,16 @@ chunks: $(CHUNKCSVS) $(CHUNKDBS)
 	@echo chunks uploaded 
 uploadembeds: $(EMBEDBS)
 	echo uploaded all embeddings
+dumpids:
+	$(PSQL) -At -c "SELECT id FROM rf WHERE show = 'affaires-sensibles';" > affaires-sensibles.ids.csv
+	$(PSQL) -At -c "SELECT id FROM rf WHERE show = 'le-cours-de-l-histoire';" > le-cours-de-l-histoire.ids.csv
+	$(PSQL) -At -c "SELECT id FROM rf WHERE show = 'les-nuits-de-france-culture';" > les-nuits-de-france-culture.ids.csv
+	$(PSQL) -At -c "SELECT id FROM rf WHERE show = 'les-pieds-sur-terre';" > les-pieds-sur-terre.ids.csv
+	$(PSQL) -At -c "SELECT id FROM rf WHERE show = 'lsd-la-serie-documentaire';" > lsd-la-serie-documentaire.ids.csv
+	$(PSQL) -At -c "SELECT id FROM rf WHERE show = 'mecaniques-du-journalisme';" > mecaniques-du-journalisme.ids.csv
 
 query:
-	$(eval querytext:= "Général de Gaulle")
+	$(eval querytext:= "Pompidou")
 	@$(eval queryvector:=$(shell python query_to_embedding.py --hftoken .hftoken $(querytext)))
 	@$(PSQL) -v queryvector=$(queryvector) < query.sql
 
@@ -116,7 +123,7 @@ test:
 
 resetdb:
 	$(PSQL) -f droptables.sql
-	rm -f $(DBS) $(CACHEDDBS) .cache/transcripts/*.db .cache/chunks/*.db .cache/embeddings/*.db
+	rm -f $(DBS) $(CACHEDDBS) data/transcripts/*.db data/chunks/*.db data/embeddings/*.db
 clean: resetdb
 	rm -rf $(TARGETS) $(RFCSVS) $(CSVS) $(CODS) 
 reallyclean: clean
