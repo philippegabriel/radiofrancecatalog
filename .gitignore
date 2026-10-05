@@ -4,3 +4,14 @@
 *.OpenAPIKey
 *.cutOffDate
 .hftoken
+
+# Airflow environment and local state (including secrets)
+/venv/airflow/
+/data/airflow/
+
+# Local AWS deployment configuration containing private resource identifiers
+/aws/cache-config.json
+/aws/README.md
+/aws/*.json
+
+__pycache__/

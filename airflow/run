@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+export PATH="$project_root/venv/airflow/bin:$PATH"
+export AIRFLOW_HOME="$project_root/data/airflow"
+export AIRFLOW_CONFIG="$project_root/airflow/airflow.cfg"
+export AIRFLOW__CORE__DAGS_FOLDER="$project_root/airflow/dags"
+export AIRFLOW__LOGGING__BASE_LOG_FOLDER="$AIRFLOW_HOME/logs"
+mkdir -p "$AIRFLOW_HOME"
+if [[ ! -f "$AIRFLOW_HOME/secrets.env" ]]; then
+    (umask 077; "$project_root/venv/airflow/bin/python" - <<'PY' > "$AIRFLOW_HOME/secrets.env"
+from cryptography.fernet import Fernet
+import secrets
+print('export AIRFLOW__CORE__FERNET_KEY=' + Fernet.generate_key().decode())
+print('export AIRFLOW__API_AUTH__JWT_SECRET=' + secrets.token_hex(32))
+print('export AIRFLOW__API__SECRET_KEY=' + secrets.token_hex(32))
+PY
+    )
+fi
+configured_fernet_key="${AIRFLOW__CORE__FERNET_KEY:-}"
+source "$AIRFLOW_HOME/secrets.env"
+if [[ -n "$configured_fernet_key" ]]; then
+    export AIRFLOW__CORE__FERNET_KEY="$configured_fernet_key"
+fi
+exec "$project_root/venv/airflow/bin/airflow" "$@"

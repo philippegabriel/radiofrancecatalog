@@ -1,0 +1,16 @@
+[Unit]
+Description=Radio France Airflow (local development)
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/radiofrance
+ExecStart=%h/projects/radiofrance/airflow/run standalone
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

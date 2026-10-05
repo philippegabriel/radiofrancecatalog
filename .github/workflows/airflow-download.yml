@@ -1,0 +1,167 @@
+name: Airflow Download
+
+on:
+  workflow_dispatch:
+    inputs:
+      show:
+        description: Show catalogue to update
+        required: true
+        default: affaires-sensibles
+        type: choice
+        options:
+          - affaires-sensibles
+          - lsd-la-serie-documentaire
+          - les-nuits-de-france-culture
+          - les-pieds-sur-terre
+          - le-cours-de-l-histoire
+          - mecaniques-du-journalisme
+
+# All shows share one metadata snapshot. Never interrupt its writer.
+concurrency:
+  group: radiofrance-airflow-download
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: airflow
+          POSTGRES_PASSWORD: airflow
+          POSTGRES_DB: airflow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U airflow -d airflow"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      RF_S3_BUCKET: ${{ secrets.RF_S3_BUCKET }}
+      RF_S3_REGION: eu-west-2
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@localhost:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${{ secrets.AIRFLOW_FERNET_KEY }}
+      RADIOFRANCE_API_KEY: ${{ secrets.OPENAPIKEY }}
+      RF_CATALOGUE_DSN: dbname=radiofrance user=airflow password=airflow host=localhost port=5432
+      RF_SHOW: ${{ inputs.show }}
+      METADATA_KEY: data/airflow/github-download/metadata.dump
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check required settings
+        env:
+          AWS_ROLE: ${{ secrets.AWS_AIRFLOW_ROLE_ARN }}
+        run: |
+          test -n "$RF_S3_BUCKET" || { echo 'Set RF_S3_BUCKET repository secret'; exit 1; }
+          test -n "$AWS_ROLE" || { echo 'Set AWS_AIRFLOW_ROLE_ARN repository secret'; exit 1; }
+          test -n "$RADIOFRANCE_API_KEY" || { echo 'Set OPENAPIKEY repository secret'; exit 1; }
+          test -n "$AIRFLOW__CORE__FERNET_KEY" || { echo 'Set AIRFLOW_FERNET_KEY repository secret'; exit 1; }
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: airflow/requirements.txt
+      - name: Install Airflow
+        run: |
+          python -m venv venv/airflow
+          venv/airflow/bin/python -m pip install -r airflow/requirements.txt
+          venv/airflow/bin/python -m pip check
+      - name: Authenticate to AWS
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_AIRFLOW_ROLE_ARN }}
+          aws-region: eu-west-2
+      - name: Download catalogue baselines once
+        run: |
+          mkdir -p "$RUNNER_TEMP/catalogues"
+          echo "RF_CATALOGUE_BASELINE_DIR=$RUNNER_TEMP/catalogues" >> "$GITHUB_ENV"
+          echo "RF_CATALOGUE_OUTPUT_DIR=$RUNNER_TEMP/updated-catalogues" >> "$GITHUB_ENV"
+          venv/airflow/bin/python - <<'PYCODE'
+          import os, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, 'airflow/dags')
+          from radiofrance_catalogue.catalogue import SHOWS
+          target = Path(os.environ['RUNNER_TEMP']) / 'catalogues'
+          for show in SHOWS:
+              subprocess.run(['aws', 's3', 'cp',
+                  f"s3://{os.environ['RF_S3_BUCKET']}/data/episodes/{show}.csv",
+                  str(target / f'{show}.csv'), '--region', os.environ['RF_S3_REGION']], check=True)
+          PYCODE
+      - name: Restore metadata if present
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          # Listing failures are fatal; only an absent snapshot starts a fresh DB.
+          count=$(aws s3api list-objects-v2 --bucket "$RF_S3_BUCKET" --prefix "$METADATA_KEY" --query "length((Contents || \`[]\`)[?Key=='$METADATA_KEY'])" --output text)
+          if [[ "$count" != 0 && "$count" != None ]]; then
+            aws s3 cp "s3://$RF_S3_BUCKET/$METADATA_KEY" "$RUNNER_TEMP/metadata.dump"
+            docker exec -i "$PG_CONTAINER" pg_restore -U airflow -d airflow --no-owner --no-privileges --exit-on-error < "$RUNNER_TEMP/metadata.dump"
+          fi
+      - name: Create lightweight catalogue database
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: docker exec "$PG_CONTAINER" createdb -U airflow radiofrance
+      - name: Test catalogue SQL and merge
+        run: venv/airflow/bin/python -m unittest discover -s airflow -p 'test_catalogue.py'
+      - name: Initialize Airflow
+        id: initialize
+        run: airflow/run db migrate
+      - name: Run Download DAG
+        run: |
+          conf=$(python -c 'import json,os; print(json.dumps({"show":os.environ["RF_SHOW"]}))')
+          airflow/run dags test radiofrance_download \
+            --dagfile-path "$GITHUB_WORKSPACE/airflow/dags/radiofrance_download.py" \
+            --conf "$conf"
+      - name: Save metadata (including failed run history)
+        if: ${{ always() && steps.initialize.outcome == 'success' }}
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "$PG_CONTAINER" pg_dump -U airflow -d airflow -Fc --no-owner --no-privileges > "$RUNNER_TEMP/metadata.dump"
+          aws s3 cp "$RUNNER_TEMP/metadata.dump" "s3://$RF_S3_BUCKET/$METADATA_KEY"
+      - name: Preserve catalogue working files
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: airflow-download-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            data/airflow/downloads/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Prepare complete Pages site
+        run: |
+          venv/airflow/bin/python - <<'PYCODE'
+          import os, shutil
+          from pathlib import Path
+          # The DAG publishes a copy here only after S3 publication succeeds.
+          source = Path(os.environ['RF_CATALOGUE_OUTPUT_DIR']) / f"{os.environ['RF_SHOW']}.csv"
+          if not source.is_file():
+              raise RuntimeError('Successful DAG did not provide its catalogue output')
+          shutil.copyfile(source, Path(os.environ['RF_CATALOGUE_BASELINE_DIR']) / source.name)
+          PYCODE
+          venv/airflow/bin/python airflow/build_pages.py "$RF_CATALOGUE_BASELINE_DIR" site
+      - name: Upload Pages site
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    needs: download
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy catalogue site
+        id: deployment
+        uses: actions/deploy-pages@v5
