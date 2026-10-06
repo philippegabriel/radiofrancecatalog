@@ -39,7 +39,6 @@ jobs:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@localhost:5432/airflow
       AIRFLOW__CORE__FERNET_KEY: ${{ secrets.AIRFLOW_FERNET_KEY }}
       RF_SNAPSHOT_SCOPE: ${{ github.ref_name }}
-      RF_METRICS_REPORT: ${{ runner.temp }}/airflow-metrics.md
       AIRFLOW__DATABASE__CHECK_MIGRATIONS: 'False'
     steps:
       - uses: actions/checkout@v7
@@ -47,6 +46,7 @@ jobs:
         env:
           AWS_ROLE: ${{ secrets.AWS_AIRFLOW_ROLE_ARN }}
         run: |
+          echo "RF_METRICS_REPORT=$RUNNER_TEMP/airflow-metrics.md" >> "$GITHUB_ENV"
           test -n "$RF_S3_BUCKET" || { echo 'Set RF_S3_BUCKET repository secret'; exit 1; }
           test -n "$AWS_ROLE" || { echo 'Set AWS_AIRFLOW_ROLE_ARN repository secret'; exit 1; }
           test -n "$AIRFLOW__CORE__FERNET_KEY" || { echo 'Set AIRFLOW_FERNET_KEY repository secret'; exit 1; }
