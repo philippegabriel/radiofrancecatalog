@@ -16,7 +16,7 @@ on:
           - le-cours-de-l-histoire
           - mecaniques-du-journalisme
 
-# All shows share one metadata snapshot. Never interrupt its writer.
+# Register and Download share a snapshot: never interrupt or overlap writers.
 concurrency:
   group: radiofrance-airflow-download
   cancel-in-progress: false
@@ -51,7 +51,9 @@ jobs:
       RADIOFRANCE_API_KEY: ${{ secrets.OPENAPIKEY }}
       RF_CATALOGUE_DSN: dbname=radiofrance user=airflow password=airflow host=localhost port=5432
       RF_SHOW: ${{ inputs.show }}
-      METADATA_KEY: data/airflow/github-download/metadata.dump
+      RF_SNAPSHOT_SCOPE: ${{ github.ref_name }}
+      RF_METRICS_REPORT: ${{ runner.temp }}/airflow-metrics.md
+      AIRFLOW__DATABASE__CHECK_MIGRATIONS: 'False'
     steps:
       - uses: actions/checkout@v7
       - name: Check required settings
@@ -72,6 +74,8 @@ jobs:
           python -m venv venv/airflow
           venv/airflow/bin/python -m pip install -r airflow/requirements.txt
           venv/airflow/bin/python -m pip check
+      - name: Test snapshot integrity and publication
+        run: venv/airflow/bin/python -m unittest discover -s airflow -p 'test_snapshot.py'
       - name: Authenticate to AWS
         uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -79,6 +83,7 @@ jobs:
           aws-region: eu-west-2
       - name: Download catalogue baselines once
         run: |
+          start=$(date +%s)
           mkdir -p "$RUNNER_TEMP/catalogues"
           echo "RF_CATALOGUE_BASELINE_DIR=$RUNNER_TEMP/catalogues" >> "$GITHUB_ENV"
           echo "RF_CATALOGUE_OUTPUT_DIR=$RUNNER_TEMP/updated-catalogues" >> "$GITHUB_ENV"
@@ -93,38 +98,60 @@ jobs:
                   f"s3://{os.environ['RF_S3_BUCKET']}/data/episodes/{show}.csv",
                   str(target / f'{show}.csv'), '--region', os.environ['RF_S3_REGION']], check=True)
           PYCODE
-      - name: Restore metadata if present
-        env:
-          PG_CONTAINER: ${{ job.services.postgres.id }}
-        run: |
-          # Listing failures are fatal; only an absent snapshot starts a fresh DB.
-          count=$(aws s3api list-objects-v2 --bucket "$RF_S3_BUCKET" --prefix "$METADATA_KEY" --query "length((Contents || \`[]\`)[?Key=='$METADATA_KEY'])" --output text)
-          if [[ "$count" != 0 && "$count" != None ]]; then
-            aws s3 cp "s3://$RF_S3_BUCKET/$METADATA_KEY" "$RUNNER_TEMP/metadata.dump"
-            docker exec -i "$PG_CONTAINER" pg_restore -U airflow -d airflow --no-owner --no-privileges --exit-on-error < "$RUNNER_TEMP/metadata.dump"
-          fi
+          echo "S3 catalogue downloads: $(( $(date +%s) - start )) seconds" | tee -a "$GITHUB_STEP_SUMMARY" "$RF_METRICS_REPORT"
       - name: Create lightweight catalogue database
         env:
           PG_CONTAINER: ${{ job.services.postgres.id }}
         run: docker exec "$PG_CONTAINER" createdb -U airflow radiofrance
       - name: Test catalogue SQL and merge
         run: venv/airflow/bin/python -m unittest discover -s airflow -p 'test_catalogue.py'
-      - name: Initialize Airflow
-        id: initialize
-        run: airflow/run db migrate
-      - name: Run Download DAG
+      - name: Test transcript downloads
+        run: venv/airflow/bin/python -m unittest discover -s airflow -p 'test_transcripts.py'
+      - name: Test episode references and cutoff
+        run: venv/airflow/bin/python -m unittest discover -s airflow -p 'test_episodes.py'
+      - name: Restore versioned Airflow snapshot
+        id: restore
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: venv/airflow/bin/python airflow/snapshot.py restore "$RUNNER_TEMP/metadata.dump"
+      - name: Check schema compatibility without migrating
+        id: schema
         run: |
+          start=$(date +%s)
+          airflow/run db check-migrations --migration-wait-timeout 0
+          echo "Schema compatibility check: $(( $(date +%s) - start )) seconds" | tee -a "$GITHUB_STEP_SUMMARY" "$RF_METRICS_REPORT"
+      - name: Measure restored Airflow database
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: bash airflow/measure_database.sh 'After snapshot restore'
+      - name: Run Download DAG
+        id: download
+        run: |
+          start=$(date +%s)
           conf=$(python -c 'import json,os; print(json.dumps({"show":os.environ["RF_SHOW"]}))')
           airflow/run dags test radiofrance_download \
             --dagfile-path "$GITHUB_WORKSPACE/airflow/dags/radiofrance_download.py" \
             --conf "$conf"
-      - name: Save metadata (including failed run history)
-        if: ${{ always() && steps.initialize.outcome == 'success' }}
+          echo "Download DAG: $(( $(date +%s) - start )) seconds" | tee -a "$GITHUB_STEP_SUMMARY" "$RF_METRICS_REPORT"
+      - name: Measure Airflow database after Download
+        id: backup
+        if: always() && steps.restore.outcome == 'success' && steps.schema.outcome == 'success' && (steps.download.outcome == 'success' || steps.download.outcome == 'failure')
         env:
           PG_CONTAINER: ${{ job.services.postgres.id }}
-        run: |
-          docker exec "$PG_CONTAINER" pg_dump -U airflow -d airflow -Fc --no-owner --no-privileges > "$RUNNER_TEMP/metadata.dump"
-          aws s3 cp "$RUNNER_TEMP/metadata.dump" "s3://$RF_S3_BUCKET/$METADATA_KEY"
+        run: bash airflow/measure_database.sh 'After Download DAG' "$RUNNER_TEMP/metadata.dump"
+      - name: Publish updated snapshot including completed work on failure
+        if: always() && steps.backup.outcome == 'success'
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: venv/airflow/bin/python airflow/snapshot.py save "$RUNNER_TEMP/metadata.dump"
+      - name: Preserve timing and size statistics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: airflow-download-statistics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/airflow-metrics.md
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Preserve catalogue working files
         if: always()
         uses: actions/upload-artifact@v6
@@ -153,6 +180,7 @@ jobs:
           path: site
 
   deploy:
+    if: github.ref_name == 'main' || github.ref_name == 'v2'
     needs: download
     runs-on: ubuntu-latest
     permissions:

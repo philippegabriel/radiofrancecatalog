@@ -1,0 +1,122 @@
+name: Airflow Register
+
+on:
+  workflow_dispatch:
+
+# Register and Download share a snapshot: never interrupt or overlap writers.
+concurrency:
+  group: radiofrance-airflow-download
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  register:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: airflow
+          POSTGRES_PASSWORD: airflow
+          POSTGRES_DB: airflow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U airflow -d airflow"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      RF_S3_BUCKET: ${{ secrets.RF_S3_BUCKET }}
+      RF_S3_REGION: eu-west-2
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@localhost:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${{ secrets.AIRFLOW_FERNET_KEY }}
+      RF_SNAPSHOT_SCOPE: ${{ github.ref_name }}
+      RF_METRICS_REPORT: ${{ runner.temp }}/airflow-metrics.md
+      AIRFLOW__DATABASE__CHECK_MIGRATIONS: 'False'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check required settings
+        env:
+          AWS_ROLE: ${{ secrets.AWS_AIRFLOW_ROLE_ARN }}
+        run: |
+          test -n "$RF_S3_BUCKET" || { echo 'Set RF_S3_BUCKET repository secret'; exit 1; }
+          test -n "$AWS_ROLE" || { echo 'Set AWS_AIRFLOW_ROLE_ARN repository secret'; exit 1; }
+          test -n "$AIRFLOW__CORE__FERNET_KEY" || { echo 'Set AIRFLOW_FERNET_KEY repository secret'; exit 1; }
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: airflow/requirements.txt
+      - name: Install Airflow
+        run: |
+          python -m venv venv/airflow
+          venv/airflow/bin/python -m pip install -r airflow/requirements.txt
+          venv/airflow/bin/python -m pip check
+      - name: Test snapshot integrity and publication
+        run: venv/airflow/bin/python -m unittest discover -s airflow -p 'test_snapshot.py'
+      - name: Authenticate to AWS
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_AIRFLOW_ROLE_ARN }}
+          aws-region: eu-west-2
+      - name: Download catalogue baselines once
+        run: |
+          start=$(date +%s)
+          mkdir -p "$RUNNER_TEMP/catalogues"
+          echo "RF_CATALOGUE_BASELINE_DIR=$RUNNER_TEMP/catalogues" >> "$GITHUB_ENV"
+          venv/airflow/bin/python - <<'PYCODE'
+          import os, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, 'airflow/dags')
+          from radiofrance_catalogue.catalogue import SHOWS
+          target = Path(os.environ['RUNNER_TEMP']) / 'catalogues'
+          for show in SHOWS:
+              subprocess.run(['aws', 's3', 'cp',
+                  f"s3://{os.environ['RF_S3_BUCKET']}/data/episodes/{show}.csv",
+                  str(target / f'{show}.csv'), '--region', os.environ['RF_S3_REGION']], check=True)
+          PYCODE
+          echo "S3 catalogue downloads: $(( $(date +%s) - start )) seconds" | tee -a "$GITHUB_STEP_SUMMARY" "$RF_METRICS_REPORT"
+      - name: Initialize empty metadata database
+        run: |
+          start=$(date +%s)
+          airflow/run db migrate
+          echo "Database initialization: $(( $(date +%s) - start )) seconds" | tee -a "$GITHUB_STEP_SUMMARY" "$RF_METRICS_REPORT"
+      - name: Measure empty metadata database
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: bash airflow/measure_database.sh 'Before registration'
+      - name: Test registration logic
+        run: venv/airflow/bin/python -m unittest discover -s airflow -p 'test_register.py'
+      - name: Prepare S3 inventory
+        run: |
+          start=$(date +%s)
+          venv/airflow/bin/python airflow/prepare_registration.py "$RUNNER_TEMP/registration-inventory"
+          echo "RF_REGISTRATION_INVENTORY_DIR=$RUNNER_TEMP/registration-inventory" >> "$GITHUB_ENV"
+          echo "S3 artifact listings: $(( $(date +%s) - start )) seconds" | tee -a "$GITHUB_STEP_SUMMARY" "$RF_METRICS_REPORT"
+      - name: Run Register DAG
+        run: |
+          start=$(date +%s)
+          airflow/run dags test radiofrance_register \
+            --dagfile-path "$GITHUB_WORKSPACE/airflow/dags/radiofrance_register.py"
+          echo "Airflow metadata registration: $(( $(date +%s) - start )) seconds" | tee -a "$GITHUB_STEP_SUMMARY" "$RF_METRICS_REPORT"
+      - name: Measure and back up populated database
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: bash airflow/measure_database.sh 'After registration' "$RUNNER_TEMP/metadata.dump"
+      - name: Publish versioned snapshot
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: venv/airflow/bin/python airflow/snapshot.py save "$RUNNER_TEMP/metadata.dump"
+      - name: Preserve timing and size statistics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: airflow-register-statistics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/airflow-metrics.md
+          if-no-files-found: ignore
+          retention-days: 7
