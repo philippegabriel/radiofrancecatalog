@@ -1,6 +1,8 @@
 name: Airflow Download
 
 on:
+  push:
+    branches: [codex/airflow-register-experiment]
   workflow_dispatch:
     inputs:
       show:
@@ -16,7 +18,7 @@ on:
           - le-cours-de-l-histoire
           - mecaniques-du-journalisme
 
-# All shows share one metadata snapshot. Never interrupt its writer.
+# Serialize catalogue publication, even though each run has a fresh metadata DB.
 concurrency:
   group: radiofrance-airflow-download
   cancel-in-progress: false
@@ -50,8 +52,7 @@ jobs:
       AIRFLOW__CORE__FERNET_KEY: ${{ secrets.AIRFLOW_FERNET_KEY }}
       RADIOFRANCE_API_KEY: ${{ secrets.OPENAPIKEY }}
       RF_CATALOGUE_DSN: dbname=radiofrance user=airflow password=airflow host=localhost port=5432
-      RF_SHOW: ${{ inputs.show }}
-      METADATA_KEY: data/airflow/github-download/metadata.dump
+      RF_SHOW: ${{ inputs.show || 'affaires-sensibles' }}
     steps:
       - uses: actions/checkout@v7
       - name: Check required settings
@@ -93,38 +94,34 @@ jobs:
                   f"s3://{os.environ['RF_S3_BUCKET']}/data/episodes/{show}.csv",
                   str(target / f'{show}.csv'), '--region', os.environ['RF_S3_REGION']], check=True)
           PYCODE
-      - name: Restore metadata if present
-        env:
-          PG_CONTAINER: ${{ job.services.postgres.id }}
-        run: |
-          # Listing failures are fatal; only an absent snapshot starts a fresh DB.
-          count=$(aws s3api list-objects-v2 --bucket "$RF_S3_BUCKET" --prefix "$METADATA_KEY" --query "length((Contents || \`[]\`)[?Key=='$METADATA_KEY'])" --output text)
-          if [[ "$count" != 0 && "$count" != None ]]; then
-            aws s3 cp "s3://$RF_S3_BUCKET/$METADATA_KEY" "$RUNNER_TEMP/metadata.dump"
-            docker exec -i "$PG_CONTAINER" pg_restore -U airflow -d airflow --no-owner --no-privileges --exit-on-error < "$RUNNER_TEMP/metadata.dump"
-          fi
       - name: Create lightweight catalogue database
         env:
           PG_CONTAINER: ${{ job.services.postgres.id }}
         run: docker exec "$PG_CONTAINER" createdb -U airflow radiofrance
       - name: Test catalogue SQL and merge
         run: venv/airflow/bin/python -m unittest discover -s airflow -p 'test_catalogue.py'
-      - name: Initialize Airflow
-        id: initialize
+      - name: Test transcript downloads
+        run: venv/airflow/bin/python -m unittest discover -s airflow -p 'test_transcripts.py'
+      - name: Test episode references and cutoff
+        run: venv/airflow/bin/python -m unittest discover -s airflow -p 'test_episodes.py'
+      - name: Initialize fresh Airflow database
         run: airflow/run db migrate
+      - name: Test registration logic
+        run: venv/airflow/bin/python -m unittest discover -s airflow -p 'test_register.py'
+      - name: Rebuild asset metadata from S3
+        run: |
+          start=$(date +%s)
+          airflow/run dags test radiofrance_register \
+            --dagfile-path "$GITHUB_WORKSPACE/airflow/dags/radiofrance_register.py"
+          elapsed=$(( $(date +%s) - start ))
+          echo "Registration completed in ${elapsed} seconds"
+          echo "Asset registration: ${elapsed} seconds" >> "$GITHUB_STEP_SUMMARY"
       - name: Run Download DAG
         run: |
           conf=$(python -c 'import json,os; print(json.dumps({"show":os.environ["RF_SHOW"]}))')
           airflow/run dags test radiofrance_download \
             --dagfile-path "$GITHUB_WORKSPACE/airflow/dags/radiofrance_download.py" \
             --conf "$conf"
-      - name: Save metadata (including failed run history)
-        if: ${{ always() && steps.initialize.outcome == 'success' }}
-        env:
-          PG_CONTAINER: ${{ job.services.postgres.id }}
-        run: |
-          docker exec "$PG_CONTAINER" pg_dump -U airflow -d airflow -Fc --no-owner --no-privileges > "$RUNNER_TEMP/metadata.dump"
-          aws s3 cp "$RUNNER_TEMP/metadata.dump" "s3://$RF_S3_BUCKET/$METADATA_KEY"
       - name: Preserve catalogue working files
         if: always()
         uses: actions/upload-artifact@v6
@@ -153,6 +150,7 @@ jobs:
           path: site
 
   deploy:
+    if: github.ref_name == 'main' || github.ref_name == 'v2'
     needs: download
     runs-on: ubuntu-latest
     permissions:

@@ -86,18 +86,48 @@ event.
 airflow/run dags trigger radiofrance_download --conf '{"show":"affaires-sensibles"}'
 ```
 
-Tasks retrieve `s3://<bucket>/data/episodes/<show>.csv`, load its episode IDs and
-publication timestamps into a run-specific PostgreSQL temporary `rf` table in `radiofrance`, derive the maximum
-publication timestamp, invoke `rf_dump.py`, merge by episode ID, and publish the
+Tasks retrieve `s3://<bucket>/data/episodes/<show>.csv`, register its episode
+references in Airflow, derive the maximum publication timestamp from their asset
+events, invoke `rf_dump.py`, merge by episode ID, and publish the
 validated cumulative CSV back to the same S3 key. A missing baseline fails the
 run; new shows must first be configured and supplied with a baseline CSV (a
 header-only CSV supports a full initial fetch). This retains the existing strict
 cutoff behavior; late/backdated episodes and metadata corrections older than the
 cutoff need a future overlap or full refresh policy.
 
-S3 CSVs are authoritative. Catalogue SQL connects to `radiofrance`, using only session-private temporary
-tables; it does not modify the permanent tables. Airflow still requires its own
-metadata backend. HTML is built in the Pages workflow using shared SQL and rendering code.
+Each episode reference has URI
+`x-radiofrance://episodes/<show>/<episode-id>` and records the show, episode ID,
+publication timestamp and ISO publication date as asset/event metadata.
+`record_episodes` seeds references from the S3 baseline, emitting events only for
+unregistered episode/date pairs. `derive_cutoff` reads the selected show's
+events using the supported `inlet_events` API and takes the maximum publication
+timestamp, independent of registration order. An empty catalogue starts at
+1900-01-01 UTC. No direct metadata SQL or radiofrance scratch tables are needed
+for this cutoff. Baseline registration reconciles episode metadata with the authoritative S3 catalogue.
+
+After catalogue publication, `record_new_episodes` records references from
+`updates.csv` before transcript downloading. These reference events establish
+expected work; they do not claim that transcript/chunk/embedding files exist.
+
+`download_transcripts` reads episode IDs from this
+run's `updates.csv`, fetches each transcript using the shared API helper in
+`fetchtranscript.py`, and uploads its JSON to
+`data/transcripts/<episode-id>.json`. It records one Airflow asset event per
+transcript with the show, episode ID, and content hash. The occurrence suffix
+is removed only for the API request, not for the stored filename.
+
+Local JSONs default to the existing project `transcripts/` directory;
+`RF_TRANSCRIPT_DIR` overrides it. There is no batch limit, S3 cache scan,
+backlog processing, or automatic transcript retry. Downloads are expected to
+succeed; an error, including an unavailable transcript, fails the task.
+The cumulative catalogue is already published at that point, so a subsequent
+incremental run will not automatically recover missed transcripts. A separate
+manually invoked recovery DAG can be added later. No transcript CSVs, chunks or
+embeddings are generated here.
+
+S3 CSVs are authoritative. Airflow still requires its own metadata backend.
+HTML is built in the Pages workflow using shared SQL and rendering code with
+session-private temporary tables in `radiofrance`; permanent tables are untouched.
 Transcript transformations and permanent PostgreSQL imports belong to future
 Transform and Import DAGs.
 
@@ -106,8 +136,8 @@ AWS CLI must be on PATH. Set `RF_S3_BUCKET` and optionally `RF_S3_REGION`
 as a fallback; this file must not be committed. Credentials use AWS's normal
 credential chain, allowing local SSO, GitHub credentials or an EC2 instance role.
 Locally refresh expired credentials with `aws sso login --profile default`.
-Worker identities require read/write access to `data/episodes/`; check write
-permissions for the publishing task.
+Worker identities require read/write access to `data/episodes/` and write
+access to `data/transcripts/*.json`.
 
 The Radio France key comes from `RADIOFRANCE_API_KEY`, or the file named by
 `RF_API_KEY_FILE` (default: project `.OpenAPIKey`). It is passed via environment,
@@ -129,6 +159,61 @@ Local validation (requires catalogue PostgreSQL):
 
 ```bash
 venv/airflow/bin/python -m unittest discover -s airflow -p 'test_catalogue.py'
+venv/airflow/bin/python -m unittest discover -s airflow -p 'test_transcripts.py'
+venv/airflow/bin/python -m unittest discover -s airflow -p 'test_episodes.py'
+```
+
+## Register DAG
+
+`radiofrance_register` is manually invoked to initialize or reconcile the
+current Airflow installation's inventory from S3. It never writes S3 objects.
+
+```bash
+# Run through the scheduler:
+airflow/run dags trigger radiofrance_register
+
+# Or run synchronously without a persistent scheduler:
+airflow/run dags test radiofrance_register \
+  --dagfile-path "$PWD/airflow/dags/radiofrance_register.py"
+```
+
+`register_catalogues` reads the six supported catalogue CSVs and uses the same
+episode-reference registration logic as the Download DAG. Publication dates
+are retained on episode references for cutoff calculation. It also registers
+the catalogue assets if they have no previous events.
+
+`register_files` runs once for each artifact type, listing all pages of S3 keys:
+
+| Artifact | Prefix | Files |
+| --- | --- | --- |
+| Transcripts | `data/transcripts/` | `.json` |
+| Chunks | `data/chunks/` | `.csv` |
+| Embeddings | `data/embeddings/` | `.csv` |
+
+Folder markers and other extensions are ignored. Artifact bodies are not
+downloaded. Existing-file events use `status=discovered_existing` and record
+artifact type, episode basename, and size. Chunks record the inferred transcript
+source URI; embeddings record the inferred chunk source URI. These links do not
+assert source availability. No production timestamps or unknown model versions
+are invented. The event timestamp represents registration.
+
+Previously recorded URIs are skipped, including transcripts published by the
+Download DAG, so rerunning Register does not create duplicate availability events.
+The immutable, retained-S3 assumption makes those events sufficient for our
+inventory. Episode references represent expected work; artifact events represent
+observed availability. Repair and transformation DAGs are still separate future
+work.
+
+Use the same AWS/environment configuration as Download. Credentials require
+`s3:GetObject` for `data/episodes/*.csv` and `s3:ListBucket` for the three artifact
+prefixes. Local SSO credentials support this. The experiment GitHub workflow invokes Register before Download. Registration
+affects the current metadata database; the persistent local database is separate
+from GitHub's fresh database.
+
+Offline registration tests:
+
+```bash
+venv/airflow/bin/python -m unittest discover -s airflow -p 'test_register.py'
 ```
 
 ## GitHub Actions
@@ -147,28 +232,33 @@ Configure repository settings:
   Keep the same key across restores; do not commit it.
 - Secret `AWS_AIRFLOW_ROLE_ARN`: AWS IAM role trusted by GitHub OIDC for this
   repository and the permitted branch. Allow `s3:GetObject`/`s3:PutObject` on
-  `data/episodes/*.csv` and `data/airflow/github-download/metadata.dump`, plus
-  `s3:ListBucket` limited to those prefixes. OIDC trust should restrict the
+  `data/episodes/*.csv`, plus
+  `s3:PutObject` on `data/transcripts/*.json` and `s3:ListBucket` limited to
+  the catalogue, transcript, chunk and embedding prefixes. OIDC trust should restrict the
   repository/ref and audience `sts.amazonaws.com`.
 
-The runner uses temporary PostgreSQL 17 only for Airflow metadata. It restores
-`data/airflow/github-download/metadata.dump` from S3 if present, migrates the schema,
-runs the DAG with `dags test`, and saves a new dump even after a task failure.
-No persistent scheduler or full Radio France corpus is needed. GitHub metadata is
-separate from your local Airflow metadata. Catalogue working files are retained as a
-GitHub artifact for seven days; credentials and key files are excluded.
+On the experiment branch, each runner starts a fresh PostgreSQL 17 Airflow
+metadata database, runs migrations, and reconstructs asset metadata with
+`radiofrance_register` before running `radiofrance_download`. There is no metadata
+snapshot restore or save. S3 catalogues and artifacts are the persistent source
+of truth. Airflow task/run history is transient on GitHub; the local metadata
+database remains persistent. The registration step records its elapsed seconds
+in the job summary so rebuilding cost can be assessed.
 
-Workflow executions are serialized across shows. Avoid simultaneous local/EC2
-publication to the same catalogue. A cancelled or forcibly terminated runner may
-publish a catalogue before saving metadata; the next run derives its cutoff from
-the S3 CSV rather than stale Airflow history. Pin-compatible Airflow/PostgreSQL
-versions when reusing snapshots. The workflow retrieves all six S3 catalogue baselines once before running the
+The experiment workflow also runs on pushes to
+`codex/airflow-register-experiment`, defaulting to affaires-sensibles; manual runs
+retain the show selector. Pages is built and validated, but deployment occurs
+only on main/v2. Catalogue working files are retained as an artifact for seven
+days; raw logs and credentials are excluded. Workflow executions remain
+serialized to avoid competing catalogue writers.
+
+The workflow retrieves all six S3 catalogue baselines once before running the
 DAG. The DAG reuses the selected local baseline and supplies its successfully
 published CSV for Pages, replacing that baseline without another S3 download.
 The complete Pages site includes CSV downloads and HTML tables.
 A separate deploy job publishes it only when the download/build job succeeds.
 Configure Pages to use GitHub Actions; the github-pages environment must allow
-deployment from the selected main/v2 branch. It does not trigger on pushes or pull requests.
+deployment from the selected main/v2 branch. The experiment branch has a push trigger; main/v2 retain manual invocation.
 
 GitHub masks the bucket secret in workflow logs. Raw Airflow logs are not uploaded
 as artifacts because secret masking does not apply to artifact contents.
@@ -176,7 +266,8 @@ Uploaded working files contain
 catalogue data, not the local AWS config; keep secrets out of DAG source.
 
 AWS role `radiofrance-github-airflow` has been created with GitHub OIDC trust for
-`philippegabriel/radiofrancecatalog` on `main` and `v2` only. Set its ARN as the
+`philippegabriel/radiofrancecatalog` on `main`, `v2`, and the exact experiment
+branch `codex/airflow-register-experiment`. Set its ARN as the
 repository secret `AWS_AIRFLOW_ROLE_ARN`. Other branches and pull-request
 identities are not trusted. The manual workflow must exist on GitHub's default
 branch before the Run workflow UI is available; select main or v2 when launching.
@@ -198,8 +289,9 @@ Each SQL operation loads its CSV into a session-private temporary `rf` table and
 `rf_html` view. Only `pg_temp` is on the search path. The connection is rolled
 back and closed after querying, so permanent catalogue/transcript/embedding
 tables are untouched. No pgvector extension or full corpus is required.
-`schema.sql` supplies the rf definition and view, `cutoffdate.sql` computes the
-cutoff, and `emithtml.sql` supplies display columns. `build_pages.py` assembles
+`schema.sql` supplies the rf definition and view, and `emithtml.sql` supplies
+display columns. `cutoffdate.sql` remains available for the Make workflow;
+the Download DAG now derives its cutoff from episode-reference events. `build_pages.py` assembles
 the site and calls the shared `csv2html.py` renderer (including its existing
 HTML escaping behavior). There is no separate HTML table renderer.
 
