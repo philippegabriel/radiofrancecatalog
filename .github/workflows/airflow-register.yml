@@ -1,9 +1,6 @@
 name: Airflow Register
 
 on:
-  push:
-    branches: [v2]
-    paths: [.github/workflows/airflow-register.yml]
   workflow_dispatch:
 
 # Register and Download share a snapshot: never interrupt or overlap writers.
