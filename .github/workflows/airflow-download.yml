@@ -108,6 +108,10 @@ jobs:
         run: venv/airflow/bin/python -m unittest discover -s airflow -p 'test_episodes.py'
       - name: Initialize fresh Airflow database
         run: airflow/run db migrate
+      - name: Measure empty Airflow database
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: bash airflow/measure_database.sh 'After migrations, before registration'
       - name: Test registration logic
         run: venv/airflow/bin/python -m unittest discover -s airflow -p 'test_register.py'
       - name: Rebuild asset metadata from S3
@@ -124,12 +128,20 @@ jobs:
           elapsed=$(( $(date +%s) - start ))
           echo "Registration completed in ${elapsed} seconds"
           echo "Airflow metadata registration (including DAG/task overhead; no S3 calls): ${elapsed} seconds" >> "$GITHUB_STEP_SUMMARY"
+      - name: Measure populated Airflow database
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: bash airflow/measure_database.sh 'After full S3 asset registration'
       - name: Run Download DAG
         run: |
           conf=$(python -c 'import json,os; print(json.dumps({"show":os.environ["RF_SHOW"]}))')
           airflow/run dags test radiofrance_download \
             --dagfile-path "$GITHUB_WORKSPACE/airflow/dags/radiofrance_download.py" \
             --conf "$conf"
+      - name: Measure Airflow database after Download
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: bash airflow/measure_database.sh 'After Download DAG'
       - name: Preserve catalogue working files
         if: always()
         uses: actions/upload-artifact@v6

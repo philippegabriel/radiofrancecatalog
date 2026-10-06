@@ -248,6 +248,11 @@ The job summary reports catalogue download, artifact listing, and metadata
 registration times separately. The metadata measurement includes Airflow DAG
 startup, task execution, and event persistence; it is not pure SQL execution time.
 The local listings are transient run inputs, not an additional source of truth.
+The experiment also measures PostgreSQL database size, the fifteen largest
+tables with their index sizes, compressed custom-format backup size, and backup
+creation time before registration, after registration, and after Download.
+Statistics appear in the GitHub job summary. Backup files are deleted immediately
+after measurement and are never uploaded; they contain private asset metadata.
 
 The experiment workflow also runs on pushes to
 `codex/airflow-register-experiment`, defaulting to affaires-sensibles; manual runs
