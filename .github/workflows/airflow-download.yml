@@ -80,6 +80,7 @@ jobs:
           aws-region: eu-west-2
       - name: Download catalogue baselines once
         run: |
+          start=$(date +%s)
           mkdir -p "$RUNNER_TEMP/catalogues"
           echo "RF_CATALOGUE_BASELINE_DIR=$RUNNER_TEMP/catalogues" >> "$GITHUB_ENV"
           echo "RF_CATALOGUE_OUTPUT_DIR=$RUNNER_TEMP/updated-catalogues" >> "$GITHUB_ENV"
@@ -94,6 +95,7 @@ jobs:
                   f"s3://{os.environ['RF_S3_BUCKET']}/data/episodes/{show}.csv",
                   str(target / f'{show}.csv'), '--region', os.environ['RF_S3_REGION']], check=True)
           PYCODE
+          echo "S3 catalogue downloads: $(( $(date +%s) - start )) seconds" >> "$GITHUB_STEP_SUMMARY"
       - name: Create lightweight catalogue database
         env:
           PG_CONTAINER: ${{ job.services.postgres.id }}
@@ -111,11 +113,17 @@ jobs:
       - name: Rebuild asset metadata from S3
         run: |
           start=$(date +%s)
+          venv/airflow/bin/python airflow/prepare_registration.py "$RUNNER_TEMP/registration-inventory"
+          echo "RF_REGISTRATION_INVENTORY_DIR=$RUNNER_TEMP/registration-inventory" >> "$GITHUB_ENV"
+          echo "S3 artifact listings: $(( $(date +%s) - start )) seconds" >> "$GITHUB_STEP_SUMMARY"
+      - name: Register prepared inventory in Airflow database
+        run: |
+          start=$(date +%s)
           airflow/run dags test radiofrance_register \
             --dagfile-path "$GITHUB_WORKSPACE/airflow/dags/radiofrance_register.py"
           elapsed=$(( $(date +%s) - start ))
           echo "Registration completed in ${elapsed} seconds"
-          echo "Asset registration: ${elapsed} seconds" >> "$GITHUB_STEP_SUMMARY"
+          echo "Airflow metadata registration (including DAG/task overhead; no S3 calls): ${elapsed} seconds" >> "$GITHUB_STEP_SUMMARY"
       - name: Run Download DAG
         run: |
           conf=$(python -c 'import json,os; print(json.dumps({"show":os.environ["RF_SHOW"]}))')

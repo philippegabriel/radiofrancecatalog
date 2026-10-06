@@ -1,5 +1,6 @@
 """Offline checks for registration of existing S3 artifacts."""
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,21 @@ import radiofrance_register as register_dag
 
 
 class RegisterTests(unittest.TestCase):
+    def test_prepared_inventory_does_not_access_s3(self) -> None:
+        inlets = MagicMock()
+        inlets.__getitem__.return_value = []
+        outlets = MagicMock()
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / 'transcript.json').write_text(
+                '[{"Key":"data/transcripts/episode_5.json","Size":12}]')
+            with patch.dict('os.environ', {
+                'RF_S3_BUCKET': 'test-bucket',
+                'RF_REGISTRATION_INVENTORY_DIR': directory,
+            }), patch.object(register_dag, 'list_objects') as listing:
+                self.assertEqual(register_dag.register_files.function('transcript', inlets, outlets), 1)
+            listing.assert_not_called()
+            outlets.__getitem__.return_value.add.assert_called_once()
+
     def test_existing_transcripts_skip_registered_uris(self) -> None:
         inlets = MagicMock()
         inlets.__getitem__.return_value = [SimpleNamespace(asset=SimpleNamespace(uri='s3://test-bucket/data/transcripts/old_5.json'))]

@@ -242,8 +242,12 @@ metadata database, runs migrations, and reconstructs asset metadata with
 `radiofrance_register` before running `radiofrance_download`. There is no metadata
 snapshot restore or save. S3 catalogues and artifacts are the persistent source
 of truth. Airflow task/run history is transient on GitHub; the local metadata
-database remains persistent. The registration step records its elapsed seconds
-in the job summary so rebuilding cost can be assessed.
+database remains persistent. CI first prepares local S3 listings, then Register
+reads those listings and the already downloaded catalogues without S3 calls.
+The job summary reports catalogue download, artifact listing, and metadata
+registration times separately. The metadata measurement includes Airflow DAG
+startup, task execution, and event persistence; it is not pure SQL execution time.
+The local listings are transient run inputs, not an additional source of truth.
 
 The experiment workflow also runs on pushes to
 `codex/airflow-register-experiment`, defaulting to affaires-sensibles; manual runs

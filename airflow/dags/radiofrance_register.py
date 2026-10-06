@@ -1,16 +1,17 @@
 """Manually register existing S3 catalogues and artifacts in Airflow metadata."""
 import hashlib
+import json
 import os
 import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Literal, Protocol, TypedDict
+from typing import Literal, Protocol, TypedDict, cast
 
 from airflow.sdk import Asset, AssetAlias, DAG, task
 from radiofrance_catalogue.catalogue import SHOWS, read_rows
 from radiofrance_catalogue.episodes import EPISODES, EpisodeEvent, record_episode_rows
-from radiofrance_catalogue.storage import aws, list_objects, s3_uri, uri
+from radiofrance_catalogue.storage import StoredObject, aws, list_objects, s3_uri, uri
 
 
 type ArtifactKind = Literal['transcript', 'chunks', 'embeddings']
@@ -79,6 +80,9 @@ the ignored local aws/cache-config.json is also supported. AWS CLI must be on PA
 Trigger with `airflow/run dags trigger radiofrance_register` or run through dags test.
 This DAG writes Airflow metadata only. It does not upload S3 objects, download
 artifact bodies, generate transformations, or import the Radio France database.
+CI can supply RF_REGISTRATION_INVENTORY_DIR containing JSON listings prepared
+by airflow/prepare_registration.py to time S3 operations separately from metadata
+registration. RF_CATALOGUE_BASELINE_DIR similarly supplies downloaded catalogues.
 It populates whichever Airflow metadata database the current installation uses.
 See airflow/README.md for the CLI and prefix layout.
 """,
@@ -128,12 +132,18 @@ See airflow/README.md for the CLI and prefix layout.
         the actual S3 URI. Record the size and inferred source URI for chunks
         and embeddings; these links do not assert that the source file exists.
         Return the number of newly registered files.
+        When RF_REGISTRATION_INVENTORY_DIR is supplied, read that run's local
+        S3 listing snapshot instead of calling S3 inside this task.
         """
         spec = ARTIFACTS[kind]
         alias = spec['alias']
         known = {event.asset.uri for event in inlet_events[alias]}
         count = 0
-        for stored in list_objects(spec['prefix']):
+        inventory = os.environ.get('RF_REGISTRATION_INVENTORY_DIR')
+        objects = (cast(list[StoredObject], json.loads(
+            (Path(inventory) / f'{kind}.json').read_text()))
+            if inventory else list_objects(spec['prefix']))
+        for stored in objects:
             key = stored['Key']
             if not key.endswith(spec['suffix']):
                 continue
