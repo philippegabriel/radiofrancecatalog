@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Render a display CSV as an HTML table; CLI reads stdin and writes stdout."""
 import sys
+from typing import TextIO
 import pandas as pd
 
 
-def render_csv(source, destination):
+def render_csv(source: TextIO, destination: TextIO) -> None:
     pd.read_csv(source).to_html(escape=False, buf=destination)
 
 

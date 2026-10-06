@@ -4,15 +4,20 @@ import tempfile
 import unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / 'dags'))
-from radiofrance_catalogue.catalogue import FIELDS, cutoff, merge, catalogue_session
+from radiofrance_catalogue.catalogue import FIELDS, cutoff, merge, catalogue_session, CatalogueRow
 
 class CatalogueTests(unittest.TestCase):
-    def test_cutoff_merge_and_validation(self):
+    def test_cutoff_merge_and_validation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             d = Path(directory)
-            def row(identifier, timestamp, title='test'):
-                return dict.fromkeys(FIELDS, '') | {'show': 'affaires-sensibles', 'id': identifier, 'published_ts': str(timestamp), 'title': title}
-            def write(path, rows):
+            def row(identifier: str, timestamp: int, title: str = 'test') -> CatalogueRow:
+                return CatalogueRow(
+                    show='affaires-sensibles', published_iso='',
+                    published_ts=str(timestamp), title=title, description='',
+                    web_url='', podcast_title='', podcast_url='', player_url='',
+                    id=identifier,
+                )
+            def write(path: Path, rows: list[CatalogueRow]) -> None:
                 with path.open('w', newline='') as stream:
                     writer = csv.DictWriter(stream, fieldnames=FIELDS)
                     writer.writeheader()
@@ -23,7 +28,10 @@ class CatalogueTests(unittest.TestCase):
                 self.assertEqual(cursor.fetchone(), ('t', True))
                 with catalogue_session(d/'old.csv', 'affaires-sensibles') as other:
                     other.execute("SELECT COUNT(*) FROM rf")
-                    self.assertEqual(other.fetchone()[0], 2)
+                    result = other.fetchone()
+                    self.assertIsNotNone(result)
+                    assert result is not None
+                    self.assertEqual(result[0], 2)
             write(d/'updates.csv', [row('b', 200, 'changed'), row('c', 300)])
             self.assertEqual(cutoff(d/'old.csv', 'affaires-sensibles'), '1970-01-01T00:03:20+00')
             self.assertEqual(merge(d/'old.csv', d/'updates.csv', d/'merged.csv', 'affaires-sensibles'), 3)

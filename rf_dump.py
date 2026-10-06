@@ -7,6 +7,9 @@ import sys
 import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
+from collections.abc import Iterator
+from typing import cast
+from radiofrance_types import EpisodeRow, GraphQLData, GraphQLVariables, Timestamp
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -42,13 +45,13 @@ query GetDiffusions($url: String!, $first: Int!, $after: String) {
 """
 
 
-def to_iso(ts):
+def to_iso(ts: Timestamp) -> str:
     if ts is None or ts == "":
         return ""
     return datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat()
 
 
-def parse_since(value):
+def parse_since(value: str) -> int:
     """
     Parse an ISO 8601 date/time such as:
 
@@ -74,7 +77,7 @@ def parse_since(value):
     return int(dt.timestamp())
 
 
-def make_session(total_timeout, retries=6, backoff=0.8):
+def make_session(total_timeout: int, retries: int = 6, backoff: float = 0.8) -> requests.Session:
     session = requests.Session()
     retry = Retry(
         total=retries,
@@ -92,11 +95,11 @@ def make_session(total_timeout, retries=6, backoff=0.8):
     )
     session.mount("https://", adapter)
     session.mount("http://", adapter)
-    session.request_timeout = total_timeout
+    setattr(session, "request_timeout", total_timeout)
     return session
 
 
-def gql_post(session, api_key, query, variables):
+def gql_post(session: requests.Session, api_key: str, query: str, variables: GraphQLVariables) -> GraphQLData:
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json",
@@ -120,20 +123,20 @@ def gql_post(session, api_key, query, variables):
         )
         raise RuntimeError(f"GraphQL returned errors: {messages}")
 
-    return payload["data"]
+    return cast(GraphQLData, payload["data"])
 
-def show_name(show_url):
+def show_name(show_url: str) -> str:
     return urlparse(show_url).path.rstrip("/").rsplit("/", 1)[-1]
 
 
 def fetch_all(
-    api_key,
-    show_url,
-    since_ts=0,
-    page_size=50,
-    sleep_sec=0.2,
-    total_timeout=90,
-):
+    api_key: str,
+    show_url: str,
+    since_ts: int = 0,
+    page_size: int = 50,
+    sleep_sec: float = 0.2,
+    total_timeout: int = 90,
+) -> Iterator[EpisodeRow]:
     session = make_session(total_timeout=total_timeout)
     after = None
     count = 0
@@ -208,7 +211,7 @@ def fetch_all(
             time.sleep(sleep_sec)
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(
         description="Dump Radio France show diffusions to CSV."
     )

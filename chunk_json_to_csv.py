@@ -4,22 +4,24 @@ import csv
 import json
 import sys
 from pathlib import Path
+from typing import cast
+from radiofrance_types import Chunk, Transcript, TranscriptSegment
 
 
 TARGET_SIZE = 1000
 MIN_SIZE = 300
 
 
-def chunk_text(chunk):
+def chunk_text(chunk: Chunk) -> str:
     return " ".join(
         segment["text"].strip()
         for _, segment in chunk
     )
 
 
-def make_chunks(segments):
-    chunks = []
-    chunk = []
+def make_chunks(segments: list[TranscriptSegment]) -> list[Chunk]:
+    chunks: list[Chunk] = []
+    chunk: Chunk = []
     chunk_size = 0
 
     for seq, segment in enumerate(segments):
@@ -52,7 +54,7 @@ def make_chunks(segments):
     return chunks
 
 
-def main():
+def main() -> None:
     if len(sys.argv) != 2:
         print(
             f"Usage: {Path(sys.argv[0]).name} TRANSCRIPT.json",
@@ -64,7 +66,7 @@ def main():
     episode_id = path.stem
 
     with path.open(encoding="utf-8") as f:
-        data = json.load(f)
+        data = cast(Transcript, json.load(f))
 
     chunks = make_chunks(data["transcript"])
 

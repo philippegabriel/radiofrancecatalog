@@ -2,7 +2,7 @@
 
 import argparse
 from pathlib import Path
-from typing import Sequence
+from collections.abc import Iterable
 
 from sentence_transformers import SentenceTransformer
 
@@ -36,7 +36,7 @@ def read_token(path: Path) -> str:
     return token
 
 
-def vector_to_string(vector: Sequence[float]) -> str:
+def vector_to_string(vector: Iterable[float]) -> str:
     return "[" + ",".join(str(value) for value in vector) + "]"
 
 
@@ -59,4 +59,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

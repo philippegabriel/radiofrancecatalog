@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from csv2html import render_csv
 
 
-def build(source, destination):
+def build(source: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     project = Path(__file__).resolve().parent.parent
     for name in ['index.html', 'index.css', 'Logo_Radio_France.svg.webp']:

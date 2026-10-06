@@ -205,3 +205,19 @@ HTML escaping behavior). There is no separate HTML table renderer.
 
 Catalogue tests now require access to radiofrance through `RF_CATALOGUE_DSN` or
 the local default. They operate solely on temporary tables.
+
+## Python type checking
+
+From the project root, install the development tools and run Pyright:
+
+```bash
+venv/airflow/bin/python -m pip install -r requirements-dev.txt
+venv/airflow/bin/pyright
+```
+
+`pyrightconfig.json` checks the project scripts and Airflow code in basic mode
+with Python 3.14. It resolves embedding dependencies from `venv/radiofrance`
+and Airflow dependencies from `venv/airflow`, using a consistent import search
+path to avoid mixing NumPy type definitions. Both environments must
+be installed for a complete local check. This is an offline static check;
+it does not run downloads, load an embedding model, or access PostgreSQL.

@@ -3,7 +3,7 @@
 import argparse
 import csv
 from pathlib import Path
-from typing import Sequence
+from collections.abc import Iterable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -56,7 +56,7 @@ def read_chunks(path: Path) -> list[list[str]]:
         return list(csv.reader(file))
 
 
-def vector_to_string(vector: Sequence[float]) -> str:
+def vector_to_string(vector: Iterable[float]) -> str:
     return "[" + ",".join(str(value) for value in vector) + "]"
 
 

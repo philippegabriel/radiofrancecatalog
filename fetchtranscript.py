@@ -8,6 +8,9 @@ import re
 import sys
 import time
 from pathlib import Path
+from collections.abc import Iterator
+from typing import cast
+from radiofrance_types import Transcript
 
 import requests
 
@@ -22,7 +25,7 @@ def aod_uuid(graphql_id: str) -> str:
     return UUID_SUFFIX_RE.sub("", graphql_id.strip())
 
 
-def fetch_transcript(uuid: str) -> dict | None:
+def fetch_transcript(uuid: str) -> Transcript | None:
     """Fetch one transcript from Radio France."""
     url = BASE_URL.format(uuid=uuid)
 
@@ -40,10 +43,10 @@ def fetch_transcript(uuid: str) -> dict | None:
         )
 
     response.raise_for_status()
-    return response.json()
+    return cast(Transcript, response.json())
 
 
-def load_ids(filename: Path):
+def load_ids(filename: Path) -> Iterator[str]:
     """Yield non-empty GraphQL IDs from the input file."""
     with filename.open(encoding="utf-8") as f:
         for line in f:
@@ -53,7 +56,7 @@ def load_ids(filename: Path):
                 yield graphql_id
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Download Radio France podcast transcripts."
     )

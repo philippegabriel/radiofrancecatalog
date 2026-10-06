@@ -1,5 +1,6 @@
 """A manually triggered smoke test; no transcript or database imports."""
 from pathlib import Path
+from collections.abc import Iterator
 import json
 import os
 from datetime import datetime, timezone
@@ -19,7 +20,7 @@ with DAG(
     tags=["radiofrance", "test"],
 ):
     @task(outlets=[TEST_OUTPUT])
-    def write_greeting():
+    def write_greeting() -> Iterator[Metadata]:
         output = Path(os.environ["AIRFLOW_HOME"]) / "test-output" / "hello.json"
         output.parent.mkdir(parents=True, exist_ok=True)
         produced_at = datetime.now(timezone.utc).isoformat()

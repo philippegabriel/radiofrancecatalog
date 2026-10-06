@@ -1,0 +1,20 @@
+{
+  "include": [
+    "*.py",
+    "airflow"
+  ],
+  "exclude": [
+    "venv",
+    "data",
+    "transcripts",
+    "**/__pycache__"
+  ],
+  "pythonVersion": "3.14",
+  "typeCheckingMode": "basic",
+  "venvPath": "venv",
+  "venv": "airflow",
+  "extraPaths": [
+    "airflow/dags",
+    "venv/radiofrance/lib/python3.14/site-packages"
+  ]
+}

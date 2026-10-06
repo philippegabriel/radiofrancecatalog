@@ -4,9 +4,11 @@ import argparse
 import csv
 import json
 from pathlib import Path
+from typing import cast
+from radiofrance_types import Transcript
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Convert a transcript JSON file to CSV.")
     parser.add_argument("input", type=Path, help="Input transcript JSON file")
     parser.add_argument("--output", required=True, type=Path, help="Output CSV file")
@@ -19,7 +21,7 @@ def main():
     episode_id = path.stem
 
     with path.open(encoding="utf-8") as f:
-        data = json.load(f)
+        data = cast(Transcript, json.load(f))
 
     with args.output.open("w", encoding="utf-8", newline="") as output:
         writer = csv.writer(output)
