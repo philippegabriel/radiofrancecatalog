@@ -1,4 +1,4 @@
-.PHONY: dump test login resetdb clean reallyclean tr chunks query
+.PHONY: all dump test login resetdb clean reallyclean tr chunks embeddings uploadembeds dumpids query
 KEY=$(file < .OpenAPIKey)
 FC_URL := https://www.radiofrance.fr/franceculture/podcasts
 FI_URL := https://www.radiofrance.fr/franceinter/podcasts
@@ -25,24 +25,26 @@ CHUNKCSVS:=$(addsuffix .csv,$(addprefix data/chunks/,$(basename $(shell ls ./tra
 CHUNKDBS:=$(subst .csv,.db, $(CHUNKCSVS))
 EMBEDCSVS:=$(addsuffix .csv,$(addprefix data/embeddings/,$(basename $(shell ls ./transcripts/))))
 EMBEDBS:=$(subst .csv,.db, $(EMBEDCSVS))
+# Preserve import markers created as intermediate prerequisites.
+.SECONDARY: $(TRCDBS) $(CHUNKDBS) $(EMBEDBS)
 all: $(CACHEDCSVS) $(CACHEDDBS) $(CODS) $(TARGETS)
 
 data/%.csv:
 	mkdir -p data/
 	wget -nc -q $(GITHUBPAGE)/$(notdir $@) -O $@ || touch $@
 
-data/%.db: data/%.csv
+$(CACHEDDBS): data/%.db: data/%.csv schema.sql importcatalogue.sql
 	mkdir -p data/
 	rm -f $@
 	$(PSQL) -f schema.sql
-	$(PSQL)  -c "\copy rf FROM $< DELIMITER ',' CSV HEADER"
+	$(PSQL) -f importcatalogue.sql < $<
 	touch $@
 
 %.cutOffDate: data/%.db
 	$(PSQL) --tuples-only -v show=$* -f cutoffdate.sql -o $@
 
-%.db: %.rf.csv data/%.db
-	$(PSQL) -c "\copy rf FROM $< DELIMITER ',' CSV HEADER"
+%.db: %.rf.csv data/%.db importcatalogue.sql
+	$(PSQL) -f importcatalogue.sql < $<
 	touch $@
 
 %.csv: emitcsv.sql %.db
@@ -83,7 +85,7 @@ data/chunks/%.csv: transcripts/%.json chunk_json_to_csv.py
 	@mkdir -p $(dir $@)
 	python chunk_json_to_csv.py $< > $@
 
-data/chunks/%.db: data/chunks/%.csv insertchunks.sql
+data/chunks/%.db: data/chunks/%.csv insertchunks.sql data/transcripts/%.db
 	cat $< | $(PSQL) \
 	    -v episode_id=$* \
 	    -f insertchunks.sql
@@ -92,7 +94,7 @@ data/chunks/%.db: data/chunks/%.csv insertchunks.sql
 embeddings: $(CHUNKCSVS)
 	python chunk_to_embeddings.py --hftoken .hftoken --output-dir data/embeddings $^
 
-data/embeddings/%.db: data/embeddings/%.csv insertembeddings.sql
+data/embeddings/%.db: data/embeddings/%.csv insertembeddings.sql data/chunks/%.db
 	cat $< | $(PSQL) \
 	    -v episode_id=$* \
 	    -f insertembeddings.sql
@@ -106,12 +108,12 @@ chunks: $(CHUNKCSVS) $(CHUNKDBS)
 uploadembeds: $(EMBEDBS)
 	echo uploaded all embeddings
 dumpids:
-	$(PSQL) -At -c "SELECT id FROM rf WHERE show = 'affaires-sensibles';" > affaires-sensibles.ids.csv
-	$(PSQL) -At -c "SELECT id FROM rf WHERE show = 'le-cours-de-l-histoire';" > le-cours-de-l-histoire.ids.csv
-	$(PSQL) -At -c "SELECT id FROM rf WHERE show = 'les-nuits-de-france-culture';" > les-nuits-de-france-culture.ids.csv
-	$(PSQL) -At -c "SELECT id FROM rf WHERE show = 'les-pieds-sur-terre';" > les-pieds-sur-terre.ids.csv
-	$(PSQL) -At -c "SELECT id FROM rf WHERE show = 'lsd-la-serie-documentaire';" > lsd-la-serie-documentaire.ids.csv
-	$(PSQL) -At -c "SELECT id FROM rf WHERE show = 'mecaniques-du-journalisme';" > mecaniques-du-journalisme.ids.csv
+	$(PSQL) -At -c "SELECT id FROM rf_external WHERE show = 'affaires-sensibles';" > affaires-sensibles.ids.csv
+	$(PSQL) -At -c "SELECT id FROM rf_external WHERE show = 'le-cours-de-l-histoire';" > le-cours-de-l-histoire.ids.csv
+	$(PSQL) -At -c "SELECT id FROM rf_external WHERE show = 'les-nuits-de-france-culture';" > les-nuits-de-france-culture.ids.csv
+	$(PSQL) -At -c "SELECT id FROM rf_external WHERE show = 'les-pieds-sur-terre';" > les-pieds-sur-terre.ids.csv
+	$(PSQL) -At -c "SELECT id FROM rf_external WHERE show = 'lsd-la-serie-documentaire';" > lsd-la-serie-documentaire.ids.csv
+	$(PSQL) -At -c "SELECT id FROM rf_external WHERE show = 'mecaniques-du-journalisme';" > mecaniques-du-journalisme.ids.csv
 
 query:
 	$(eval querytext:= "Pompidou")

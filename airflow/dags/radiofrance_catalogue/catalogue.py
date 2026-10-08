@@ -50,6 +50,7 @@ PROJECT = Path(__file__).resolve().parents[3]
 
 @contextmanager
 def catalogue_session(path: str | Path, show: str) -> Iterator[PostgreSQLCursor]:
+    """Load CSV rows into an isolated temporary catalogue; roll back on exit."""
     rows = read_rows(path, show)
     # An explicit separate DSN prevents using Airflow metadata as scratch space.
     connection = psycopg2.connect(os.environ.get('RF_CATALOGUE_DSN', 'dbname=radiofrance user=pgabriel'))
@@ -58,12 +59,10 @@ def catalogue_session(path: str | Path, show: str) -> Iterator[PostgreSQLCursor]
             cursor.execute("SET LOCAL search_path TO pg_temp")
             cursor.execute("SET LOCAL TIME ZONE 'UTC'")
             schema = (PROJECT / 'schema.sql').read_text()
-            start = schema.index('CREATE TABLE IF NOT EXISTS rf (')
-            end = schema.index(';', start) + 1
-            cursor.execute(schema[start:end].replace('CREATE TABLE IF NOT EXISTS rf', 'CREATE TEMP TABLE rf'))
+            cursor.execute((PROJECT / 'catalogue_csv_schema.sql').read_text())
             start = schema.index('CREATE OR REPLACE VIEW rf_html AS')
             end = schema.index(';', start) + 1
-            cursor.execute(schema[start:end].replace('CREATE OR REPLACE VIEW', 'CREATE TEMP VIEW'))
+            cursor.execute(schema[start:end].replace('CREATE OR REPLACE VIEW', 'CREATE TEMP VIEW').replace('FROM rf_external', 'FROM rf'))
             from io import StringIO
             buffer = StringIO()
             writer = csv.DictWriter(buffer, fieldnames=FIELDS)

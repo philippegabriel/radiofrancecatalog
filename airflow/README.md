@@ -336,7 +336,10 @@ Each SQL operation loads its CSV into a session-private temporary `rf` table and
 `rf_html` view. Only `pg_temp` is on the search path. The connection is rolled
 back and closed after querying, so permanent catalogue/transcript/embedding
 tables are untouched. No pgvector extension or full corpus is required.
-`schema.sql` supplies the rf definition and view, and `emithtml.sql` supplies
+`catalogue_csv_schema.sql` supplies the CSV-shaped temporary rf definition;
+`schema.sql` supplies the HTML view, adapted to the temporary table. The compact
+persistent schema uses integer episode references independently of this scratch
+catalogue. `emithtml.sql` supplies
 display columns. `cutoffdate.sql` remains available for the Make workflow;
 the Download DAG now derives its cutoff from episode-reference events. `build_pages.py` assembles
 the site and calls the shared `csv2html.py` renderer (including its existing

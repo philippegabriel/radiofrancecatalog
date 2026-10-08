@@ -1,4 +1,7 @@
-drop view if exists rf_html;
-drop table if exists semantic_chunk;
-drop table if exists transcript_segment;
-drop table if exists rf;
+DROP VIEW IF EXISTS rf_html;
+DROP VIEW IF EXISTS rf_external;
+DROP TABLE IF EXISTS semantic_chunk;
+DROP TABLE IF EXISTS transcript_segment;
+DROP TABLE IF EXISTS rf;
+DROP VIEW IF EXISTS episode_identity_external;
+DROP TABLE IF EXISTS episode_identity;
