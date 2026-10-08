@@ -166,7 +166,7 @@ jobs:
               if database.exists():
                   report.write('```text\n' + database.read_text() + '\n```\n')
           PY
-          cat "$METRICS/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          cat "$METRICS/summary.md" | tee -a "$GITHUB_STEP_SUMMARY"
           # The database dump is never uploaded as a GitHub artifact.
           rm -f "$SNAPSHOT"
 
