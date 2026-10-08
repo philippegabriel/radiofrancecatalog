@@ -10,7 +10,7 @@
 ## Worflow
 ![code workflow](docs/workflow.svg)
 
-The [compact PostgreSQL schema and CSV rebuild guide](docs/compact-schema.md)
+The [compact PostgreSQL schema and JSON/CSV rebuild guide](docs/compact-schema.md)
 describes integer episode identities, reconstructed chunk text and half-precision
 embeddings. This schema targets a fresh database, leaving existing databases intact.
 

@@ -19,11 +19,13 @@ CACHEDDBS := $(addprefix data/,$(DBS))
 CACHEDCSVS := $(addprefix data/,$(CSVS))
 TARGETS:= $(CSVS) $(addsuffix .html, $(PODCASTS))
 PSQL := psql -X -v ON_ERROR_STOP=1 -U pgabriel radiofrance
-TRCSVS:=$(addsuffix .csv,$(addprefix data/transcripts/,$(basename $(shell ls ./transcripts/))))
-TRCDBS:=$(subst .csv,.db, $(TRCSVS))
-CHUNKCSVS:=$(addsuffix .csv,$(addprefix data/chunks/,$(basename $(shell ls ./transcripts/))))
+PYTHON ?= python
+TRANSCRIPT_JSONS := $(wildcard transcripts/*.json)
+TRCDBS := $(patsubst transcripts/%.json,data/transcripts/%.db,$(TRANSCRIPT_JSONS))
+CHUNKCSVS := $(patsubst transcripts/%.json,data/chunks/%.csv,$(TRANSCRIPT_JSONS))
 CHUNKDBS:=$(subst .csv,.db, $(CHUNKCSVS))
-EMBEDCSVS:=$(addsuffix .csv,$(addprefix data/embeddings/,$(basename $(shell ls ./transcripts/))))
+# Import only embedding artifacts that exist; empty transcripts may have none.
+EMBEDCSVS := $(wildcard data/embeddings/*.csv)
 EMBEDBS:=$(subst .csv,.db, $(EMBEDCSVS))
 # Preserve import markers created as intermediate prerequisites.
 .SECONDARY: $(TRCDBS) $(CHUNKDBS) $(EMBEDBS)
@@ -71,19 +73,15 @@ $(addsuffix .rf.csv,$(FCPODCASTS)): %.rf.csv: %.cutOffDate
 	echo '<img src="Logo_Radio_France.svg.webp" alt="Radio France">' >> $@
 	python csv2html.py < $< >> $@
 
-data/transcripts/%.csv: transcripts/%.json
+data/transcripts/%.db: transcripts/%.json inserttranscript.sql schema.sql
 	@mkdir -p $(@D)
-	./transcript_json_to_csv.py $< --output $@
-
-data/transcripts/%.db: data/transcripts/%.csv inserttranscript.sql
-	cat $< | $(PSQL) \
-	    -v episode_id=$* \
-	    -f inserttranscript.sql
+	@rm -f $@
+	RF_TRANSCRIPT_JSON="$<" $(PSQL) -v episode_id=$* -f inserttranscript.sql
 	@touch $@
 
-data/chunks/%.csv: transcripts/%.json chunk_json_to_csv.py
+data/chunks/%.csv: transcripts/%.json chunk_json_to_csv.py transcript_json.py radiofrance_types.py
 	@mkdir -p $(dir $@)
-	python chunk_json_to_csv.py $< > $@
+	$(PYTHON) chunk_json_to_csv.py $< > $@
 
 data/chunks/%.db: data/chunks/%.csv insertchunks.sql data/transcripts/%.db
 	cat $< | $(PSQL) \
@@ -101,7 +99,7 @@ data/embeddings/%.db: data/embeddings/%.csv insertembeddings.sql data/chunks/%.d
 	@touch $@
 
 
-tr: $(TRCSVS) $(TRCDBS)
+tr: $(TRCDBS)
 	@echo transcripts uploaded
 chunks: $(CHUNKCSVS) $(CHUNKDBS)
 	@echo chunks uploaded 

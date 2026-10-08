@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 
 import csv
-import json
 import sys
 from pathlib import Path
-from typing import cast
-from radiofrance_types import Chunk, Transcript, TranscriptSegment
+from radiofrance_types import Chunk, TranscriptSegment
+from transcript_json import read_segments
 
 
 TARGET_SIZE = 1000
@@ -65,10 +64,7 @@ def main() -> None:
     path = Path(sys.argv[1])
     episode_id = path.stem
 
-    with path.open(encoding="utf-8") as f:
-        data = cast(Transcript, json.load(f))
-
-    chunks = make_chunks(data["transcript"])
+    chunks = make_chunks(read_segments(path))
 
     writer = csv.writer(sys.stdout)
 

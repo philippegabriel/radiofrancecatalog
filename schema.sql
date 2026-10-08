@@ -77,3 +77,51 @@ CREATE TABLE IF NOT EXISTS semantic_chunk (
         REFERENCES transcript_segment (episode_id, seq)
         DEFERRABLE INITIALLY DEFERRED
 );
+
+-- Replace one episode from its source JSON, preserving array positions as seq.
+-- Invoker permissions apply; no filesystem access or optional extension is used.
+CREATE OR REPLACE FUNCTION import_transcript_json(external_episode_id text, document jsonb)
+RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_id integer;
+    inserted integer;
+BEGIN
+    -- Serialize replacements of the same episode, including concurrent callers.
+    SELECT r.episode_id INTO target_id
+    FROM rf r JOIN episode_identity e ON e.id = r.episode_id
+    WHERE e.source_uuid = split_part(external_episode_id, '_', 1)::uuid
+      AND e.source_suffix = split_part(external_episode_id, '_', 2)::integer
+      AND e.source_uuid::text || '_' || e.source_suffix::text = external_episode_id
+    FOR UPDATE OF r;
+    IF target_id IS NULL THEN
+        RAISE EXCEPTION 'Episode must be imported into the catalogue first: %', external_episode_id;
+    END IF;
+    IF jsonb_typeof(document) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(document -> 'transcript') IS DISTINCT FROM 'array' THEN
+        RAISE EXCEPTION 'Expected a JSON object containing a transcript array';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM jsonb_array_elements(document -> 'transcript') AS s(segment)
+        WHERE jsonb_typeof(segment) IS DISTINCT FROM 'object'
+           OR jsonb_typeof(segment -> 'text') IS DISTINCT FROM 'string'
+           OR jsonb_typeof(segment -> 'start') IS DISTINCT FROM 'number'
+           OR jsonb_typeof(segment -> 'end') IS DISTINCT FROM 'number'
+           OR (segment ? 'speaker' AND jsonb_typeof(segment -> 'speaker') NOT IN ('string', 'null'))
+    ) THEN
+        RAISE EXCEPTION 'Invalid transcript segment: require numeric start/end, string text and optional string/null speaker';
+    END IF;
+    DELETE FROM transcript_segment WHERE episode_id = target_id;
+    INSERT INTO transcript_segment (episode_id, seq, start_time, end_time, speaker, text)
+    SELECT target_id, (position - 1)::integer,
+           (segment ->> 'start')::double precision,
+           (segment ->> 'end')::double precision,
+           segment ->> 'speaker', segment ->> 'text'
+    FROM jsonb_array_elements(document -> 'transcript') WITH ORDINALITY AS s(segment, position);
+    GET DIAGNOSTICS inserted = ROW_COUNT;
+    RETURN inserted;
+END;
+$$;
+COMMENT ON FUNCTION import_transcript_json(text, jsonb) IS
+'Replace an episode transcript atomically from JSON; return inserted segment count. Zero-based seq includes blank text. Catalogue required; deferred chunk boundary constraints apply at transaction commit.';

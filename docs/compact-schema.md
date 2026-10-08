@@ -1,7 +1,7 @@
 # Compact PostgreSQL schema
 
 This schema is for a fresh database, not an in-place upgrade. Keep existing
-databases and source CSV files until the rebuilt database has been verified.
+databases and source JSON and CSV files until the rebuilt database has been verified.
 It requires PostgreSQL with pgvector 0.7 or newer (`halfvec` support).
 
 `episode_identity` maps an identity-generated integer to a UUID and integer
@@ -16,7 +16,7 @@ use external IDs for files, assets, exports and cross-database references.
 temporary CSV catalogue remains independent of the persistent compact schema
 and does not require pgvector.
 
-## Rebuild from existing CSVs
+## Rebuild from JSON and existing CSVs
 
 Create a **new database** and use its connection details for every command:
 
@@ -26,16 +26,27 @@ psql -X -v ON_ERROR_STOP=1 -U pgabriel -d radiofrance_compact -f schema.sql
 psql -X -v ON_ERROR_STOP=1 -U pgabriel -d radiofrance_compact -f importcatalogue.sql < data/affaires-sensibles.csv
 ```
 
-Repeat the catalogue import for all shows, then load transcript, chunk and
+Repeat the catalogue import for all shows, then import transcript JSON, chunk CSVs and
 embedding CSVs in that order. For each episode, pass its external ID:
 
 ```bash
-psql -X -v ON_ERROR_STOP=1 -U pgabriel -d radiofrance_compact -v episode_id=UUID_SUFFIX -f inserttranscript.sql < data/transcripts/UUID_SUFFIX.csv
+RF_TRANSCRIPT_JSON=transcripts/UUID_SUFFIX.json psql -X -v ON_ERROR_STOP=1 -U pgabriel -d radiofrance_compact -v episode_id=UUID_SUFFIX -f inserttranscript.sql
 psql -X -v ON_ERROR_STOP=1 -U pgabriel -d radiofrance_compact -v episode_id=UUID_SUFFIX -f insertchunks.sql < data/chunks/UUID_SUFFIX.csv
 psql -X -v ON_ERROR_STOP=1 -U pgabriel -d radiofrance_compact -v episode_id=UUID_SUFFIX -f insertembeddings.sql < data/embeddings/UUID_SUFFIX.csv
 ```
 
-CSV layouts stay unchanged, including the chunk text needed by the embedding
+Transcript import reads JSON directly; no transcript CSV files are written.
+The `import_transcript_json(text, jsonb)` PostgreSQL function validates the source
+and replaces that episode atomically, returning the inserted segment count.
+The `psql` script reads the client-local file named by `RF_TRANSCRIPT_JSON`
+and sends its contents as a quoted JSON value. No Python importer, database
+driver, server filesystem access or intermediate transcript CSV is needed.
+Install or update the function by running `schema.sql` before importing.
+Each invocation imports one episode atomically.
+Blank segments retain their original zero-based sequence numbers. PostgreSQL uses array ordinality minus one; chunk generation uses the source
+array order through `transcript_json.py`, preserving the same numbering.
+
+Chunk and embedding CSV layouts stay unchanged, including the chunk text needed by the embedding
 generator. Import staging tables are transaction-local: chunk text is discarded
 after import, and embeddings are converted to `halfvec(384)`. Missing episodes,
 wrong episode IDs, unreconstructible chunk text/boundaries and embeddings for missing chunks fail rather than being
@@ -70,3 +81,45 @@ set to a role that can create databases and install pgvector. It creates and
 removes an isolated test database, checks CSV round trips, integer references,
 half-precision storage, reconstructed search text and failed-import rollback.
 Run `venv/airflow/bin/pyright` after Python changes.
+
+## Independent chunk production
+
+`python chunk_json_to_csv.py transcripts/UUID_SUFFIX.json > data/chunks/UUID_SUFFIX.csv`
+reads JSON only and needs no database. Chunk CSV text is retained for embedding
+production, then discarded on database import. Segment import and chunk generation
+use the same source order and sequence numbering, so changing chunk boundaries or adding
+overlap does not require reimporting transcript text.
+
+`make tr` imports JSON directly. `make data/chunks/UUID_SUFFIX.csv` and
+`make embeddings` produce artifacts without database access; `make chunks` imports
+chunks after transcripts and `make uploadembeds` imports existing embedding CSVs after chunks; empty
+transcripts need not have embedding artifacts.
+Override `PYTHON` for your interpreter and `PSQL` for connection options, for example:
+
+```bash
+make tr PYTHON=venv/airflow/bin/python PSQL="psql -U pgabriel -d radiofrance_compact"
+```
+
+Existing transcript CSV files are no longer used. Import markers still require
+removal when changing the target database or forcing a reimport.
+
+The importer can also be called directly by SQL clients:
+
+```sql
+SELECT import_transcript_json(
+    '12345678-1234-4234-8234-123456789abc_5',
+    '{"transcript":[{"start":0,"end":1,"text":"Bonjour"}]}'::jsonb
+);
+```
+
+The function uses ordinary caller permissions and built-in PostgreSQL JSON
+support. It needs neither PL/Python nor access to files on the database server.
+An empty transcript array removes all segments, subject to existing chunk boundary
+constraints. Malformed JSON, invalid segment fields and unknown episodes fail
+without retaining partial changes. Concurrent replacements of an episode are
+serialized by a catalogue row lock. Transcript edits can invalidate existing
+embeddings even when their boundary references remain valid.
+
+Transcript and chunk imports resolve an episode through the existing UUID/suffix
+unique index. Embedding joins also use UUID/suffix conditions; PostgreSQL chooses
+their join plan based on the staging table estimates.

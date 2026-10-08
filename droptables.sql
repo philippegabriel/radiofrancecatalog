@@ -1,3 +1,4 @@
+DROP FUNCTION IF EXISTS import_transcript_json(text, jsonb);
 DROP VIEW IF EXISTS rf_html;
 DROP VIEW IF EXISTS rf_external;
 DROP TABLE IF EXISTS semantic_chunk;

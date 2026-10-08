@@ -1,7 +1,9 @@
 BEGIN;
 CREATE TEMP TABLE episode_target ON COMMIT DROP AS
-SELECT r.episode_id FROM rf r JOIN episode_identity_external e ON e.id = r.episode_id
-WHERE e.external_id = :'episode_id';
+SELECT r.episode_id FROM rf r JOIN episode_identity e ON e.id = r.episode_id
+WHERE e.source_uuid = split_part(:'episode_id', '_', 1)::uuid
+  AND e.source_suffix = split_part(:'episode_id', '_', 2)::integer
+  AND e.source_uuid::text || '_' || e.source_suffix::text = :'episode_id';
 DO $$ BEGIN
     IF (SELECT count(*) FROM episode_target) <> 1 THEN
         RAISE EXCEPTION 'Episode must be imported into the catalogue first';
