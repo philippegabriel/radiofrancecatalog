@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 45
     services:
       postgres:
-        image: pgvector/pgvector:pg18
+        image: pgvector/pgvector:pg18@sha256:2358fcba361ed2233a5ed81b5fe4ca779ccb304120ce531a3bf51c0ed7e2bc11
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: restore-experiment
@@ -33,18 +33,20 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      PG_CONTAINER: ${{ job.services.postgres.id }}
       SNAPSHOT_BUCKET: 9c47ab5c-5039-42c1-a790-7e732bde98f4
       SNAPSHOT_KEY: data/radiofrance/snapshots/2844d95580e902ebd822a952ea1595e9dcdc8d60a171ec3e1edaf203078994de.dump
       SNAPSHOT_SHA256: 2844d95580e902ebd822a952ea1595e9dcdc8d60a171ec3e1edaf203078994de
       SNAPSHOT_BYTES: '2721382453'
     steps:
       - name: Prepare measurements
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
         run: |
           set -euo pipefail
           metrics="$RUNNER_TEMP/restore-metrics"
           mkdir -p "$metrics"
           echo "METRICS=$metrics" >> "$GITHUB_ENV"
+          echo "PG_CONTAINER=$PG_CONTAINER" >> "$GITHUB_ENV"
           echo "SNAPSHOT=$RUNNER_TEMP/radiofrance.dump" >> "$GITHUB_ENV"
           date +%s > "$metrics/start"
           echo setup > "$metrics/phase"
