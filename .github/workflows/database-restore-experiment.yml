@@ -1,0 +1,177 @@
+name: Database snapshot restore experiment
+
+# Restores an immutable snapshot into an ephemeral PostgreSQL service only.
+# The first branch push runs the experiment; it can also be rerun manually.
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/snapshot-restore-test]
+    paths: [.github/workflows/database-restore-experiment.yml]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: database-restore-experiment
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: restore-experiment
+          POSTGRES_DB: radiofrance
+        options: >-
+          --health-cmd "pg_isready -U postgres -d radiofrance"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PG_CONTAINER: ${{ job.services.postgres.id }}
+      SNAPSHOT_BUCKET: 9c47ab5c-5039-42c1-a790-7e732bde98f4
+      SNAPSHOT_KEY: data/radiofrance/snapshots/2844d95580e902ebd822a952ea1595e9dcdc8d60a171ec3e1edaf203078994de.dump
+      SNAPSHOT_SHA256: 2844d95580e902ebd822a952ea1595e9dcdc8d60a171ec3e1edaf203078994de
+      SNAPSHOT_BYTES: '2721382453'
+    steps:
+      - name: Prepare measurements
+        run: |
+          set -euo pipefail
+          metrics="$RUNNER_TEMP/restore-metrics"
+          mkdir -p "$metrics"
+          echo "METRICS=$metrics" >> "$GITHUB_ENV"
+          echo "SNAPSHOT=$RUNNER_TEMP/radiofrance.dump" >> "$GITHUB_ENV"
+          date +%s > "$metrics/start"
+          echo setup > "$metrics/phase"
+          df -B1 "$GITHUB_WORKSPACE" > "$metrics/disk-before.txt"
+          docker exec "$PG_CONTAINER" psql -X -U postgres -d radiofrance -c 'SELECT version();' > "$metrics/postgres-version.txt"
+          cat > "$metrics/sample.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -u
+          printf 'elapsed_seconds,phase,free_bytes,wal_bytes\n'
+          while [[ ! -f "$METRICS/stop" ]]; do
+            elapsed=$(( $(date +%s) - $(cat "$METRICS/start") ))
+            free=$(df -B1 --output=avail "$GITHUB_WORKSPACE" | tail -n 1 | tr -d ' ')
+            wal=$(docker exec "$PG_CONTAINER" sh -c 'du -s -B1 "$PGDATA/pg_wal"' 2>/dev/null | awk '{print $1}')
+            printf '%s,%s,%s,%s\n' "$elapsed" "$(cat "$METRICS/phase")" "$free" "${wal:-0}"
+            sleep 2
+          done
+          SH
+          METRICS="$metrics" nohup bash "$metrics/sample.sh" > "$metrics/disk-samples.csv" 2> "$metrics/sampling-errors.log" < /dev/null &
+          echo $! > "$metrics/sampler.pid"
+          # Keep the sampler alive between GitHub Actions steps.
+          disown
+
+      - name: Authenticate to S3 with read-only experiment role
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::211125302956:role/radiofrance-github-restore-experiment
+          aws-region: eu-west-2
+
+      - name: Download snapshot
+        run: |
+          set -euo pipefail
+          echo download > "$METRICS/phase"
+          start=$(date +%s)
+          aws s3 cp "s3://$SNAPSHOT_BUCKET/$SNAPSHOT_KEY" "$SNAPSHOT" --only-show-errors
+          echo $(( $(date +%s) - start )) > "$METRICS/download-seconds"
+          test "$(stat -c %s "$SNAPSHOT")" = "$SNAPSHOT_BYTES"
+
+      - name: Verify snapshot checksum
+        run: |
+          set -euo pipefail
+          echo checksum > "$METRICS/phase"
+          start=$(date +%s)
+          printf '%s  %s\n' "$SNAPSHOT_SHA256" "$SNAPSHOT" | sha256sum --check
+          echo $(( $(date +%s) - start )) > "$METRICS/checksum-seconds"
+          docker exec -i "$PG_CONTAINER" pg_restore --list < "$SNAPSHOT" > "$METRICS/archive-contents.txt"
+
+      - name: Restore PostgreSQL snapshot
+        run: |
+          set -euo pipefail
+          echo restore > "$METRICS/phase"
+          start=$(date +%s)
+          # Serial restore matches the existing Airflow snapshot approach.
+          # Stream the host file into the container, avoiding a second dump copy.
+          /usr/bin/time -v -o "$METRICS/restore-resources.txt" \
+            docker exec -i "$PG_CONTAINER" pg_restore \
+            -U postgres -d radiofrance --no-owner --no-acl --exit-on-error \
+            < "$SNAPSHOT" 2> "$METRICS/restore-errors.log"
+          echo $(( $(date +%s) - start )) > "$METRICS/restore-seconds"
+          echo restored > "$METRICS/phase"
+          df -B1 "$GITHUB_WORKSPACE" > "$METRICS/disk-after-restore.txt"
+          rm "$SNAPSHOT"
+          echo dump-deleted > "$METRICS/phase"
+          df -B1 "$GITHUB_WORKSPACE" > "$METRICS/disk-after-dump-deletion.txt"
+
+      - name: Validate restored records and measure database
+        run: |
+          set -euo pipefail
+          echo validation > "$METRICS/phase"
+          docker exec -i "$PG_CONTAINER" psql -X -U postgres -d radiofrance -v ON_ERROR_STOP=1 <<'SQL' > "$METRICS/database.txt"
+          SELECT pg_database_size(current_database()) AS database_bytes,
+                 pg_size_pretty(pg_database_size(current_database())) AS database_size;
+          SELECT relname, pg_total_relation_size(relid) AS total_bytes
+          FROM pg_stat_user_tables ORDER BY total_bytes DESC;
+          SELECT extversion FROM pg_extension WHERE extname = 'vector';
+          DO $$ BEGIN
+            IF (SELECT count(*) FROM rf) <> 38083
+               OR (SELECT count(*) FROM transcript_segment) <> 13903820
+               OR (SELECT count(*) FROM semantic_chunk) <> 1310547
+               OR (SELECT count(embedding) FROM semantic_chunk) <> 1310446 THEN
+              RAISE EXCEPTION 'Restored record counts differ from snapshot';
+            END IF;
+          END $$;
+          SQL
+
+      - name: Publish measurements even if restore fails
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -z "${METRICS:-}" ]]; then exit 0; fi
+          echo complete > "$METRICS/phase"
+          sleep 3
+          touch "$METRICS/stop"
+          df -B1 "$GITHUB_WORKSPACE" > "$METRICS/disk-final.txt"
+          python - <<'PY'
+          import csv, os
+          from pathlib import Path
+          metrics = Path(os.environ['METRICS'])
+          rows = list(csv.DictReader((metrics / 'disk-samples.csv').open()))
+          with (metrics / 'summary.md').open('w') as report:
+              report.write('# PostgreSQL snapshot restore experiment\n\n')
+              report.write('Standard ubuntu-latest runner; PostgreSQL 18 with pgvector.\n')
+              report.write('Restore-only test: Airflow and embedding dependencies are not installed.\n\n')
+              report.write(f"Snapshot: {int(os.environ['SNAPSHOT_BYTES']) / 2**30:.2f} GiB\n\n")
+              for label in ('download', 'checksum', 'restore'):
+                  result = metrics / f'{label}-seconds'
+                  report.write(f'{label.title()}: {result.read_text().strip() + " seconds" if result.exists() else "did not complete"}\n\n')
+              if rows:
+                  initial = int(rows[0]['free_bytes'])
+                  minimum = min(int(row['free_bytes']) for row in rows)
+                  wal = max(int(row['wal_bytes']) for row in rows)
+                  report.write(f'Initial free disk: {initial / 2**30:.2f} GiB\n\n')
+                  report.write(f'Minimum sampled free disk: {minimum / 2**30:.2f} GiB\n\n')
+                  report.write(f'Peak sampled additional disk use: {(initial - minimum) / 2**30:.2f} GiB\n\n')
+                  report.write(f'Peak sampled PostgreSQL WAL: {wal / 2**30:.2f} GiB\n\n')
+                  report.write('Disk sampling interval: approximately 2 seconds.\n\n')
+              database = metrics / 'database.txt'
+              if database.exists():
+                  report.write('```text\n' + database.read_text() + '\n```\n')
+          PY
+          cat "$METRICS/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          # The database dump is never uploaded as a GitHub artifact.
+          rm -f "$SNAPSHOT"
+
+      - name: Preserve experiment measurements
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: database-restore-metrics-${{ github.run_id }}
+          path: ${{ runner.temp }}/restore-metrics/
+          retention-days: 7
