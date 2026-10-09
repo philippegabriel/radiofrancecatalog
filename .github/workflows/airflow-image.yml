@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish the tested image to GHCR (main or v2 only)
+        description: Publish the tested image to GHCR (publishing branches only)
         type: boolean
         required: true
         default: false
@@ -48,7 +48,7 @@ jobs:
           image="ghcr.io/${OWNER,,}/radiofrance-airflow"
           echo "name=$image" >> "$GITHUB_OUTPUT"
           publish=false
-          if [[ "$BRANCH" == main || "$BRANCH" == v2 ]]; then
+          if [[ "$BRANCH" == main || "$BRANCH" == v2 || "$BRANCH" == codex/airflow-container-image ]]; then
             if [[ "$EVENT" == push || ( "$EVENT" == workflow_dispatch && "$REQUEST_PUBLISH" == true ) ]]; then
               publish=true
             fi
@@ -95,6 +95,7 @@ jobs:
           BRANCH: ${{ github.ref_name }}
         run: |
           docker tag radiofrance-airflow:test "$IMAGE:$GITHUB_SHA"
-          docker tag radiofrance-airflow:test "$IMAGE:$BRANCH"
+          tag="${BRANCH//\//-}"
+          docker tag radiofrance-airflow:test "$IMAGE:$tag"
           docker push "$IMAGE:$GITHUB_SHA"
-          docker push "$IMAGE:$BRANCH"
+          docker push "$IMAGE:$tag"

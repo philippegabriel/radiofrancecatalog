@@ -41,9 +41,9 @@ package manager, isolated from Airflow's Python environment.
 ## GitHub build and publication
 
 **Build Airflow image** runs on changes to `docker/`, `airflow/requirements.txt`,
-or its workflow file. Pushes to main/v2 build and publish; the development branch
-and pull requests build and test without publishing. Manual invocation defaults
-to build-only; select `publish` on main or v2 to publish explicitly. There is no
+or its workflow file. Pushes to main, v2 and `codex/airflow-container-image` build and publish;
+pull requests build and test without publishing. Manual invocation defaults
+to build-only; select `publish` on one of these branches to publish explicitly. There is no
 scheduled build currently. GitHub's manual-run UI requires the workflow to exist
 on the default branch first.
 
@@ -55,7 +55,8 @@ GitHub cache reuses layers between builds.
 The image name is `ghcr.io/<repository-owner>/radiofrance-airflow`. Tags are:
 
 - The full Git commit SHA: identifies the tested build.
-- `main` or `v2`: moving convenience tags for each publishing branch.
+- `main`, `v2` or `codex-airflow-container-image`: moving convenience tags
+  for each publishing branch (slashes are replaced with hyphens).
 
 When adopting the image in a workflow, pin the tested SHA tag or image digest.
 For deliberate rebuilds, pin a digest if exact bytes must remain fixed: a manual
