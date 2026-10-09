@@ -350,6 +350,34 @@ the local default. They operate solely on temporary tables.
 
 ## Python type checking
 
+### GitHub Download container
+
+Download uses the commit-tagged GHCR image defined under `docker/`, with a
+separate PostgreSQL 17 service at hostname `postgres`. Local invocations and
+Register retain their virtualenv defaults. The job sets `RF_AIRFLOW_PYTHON`,
+`RF_AIRFLOW_COMMAND`, and `RF_DOWNLOAD_PYTHON` to the container executables.
+`PYTHONUSERBASE=/home/airflow/.local` exposes the image's installed packages to
+root job steps. The job removes the unused FAB provider bundled in the upstream
+image because its additional schema is absent from the existing SimpleAuthManager
+snapshot. This preserves the no-migration compatibility check.
+
+Measured Download job durations for `affaires-sensibles`:
+
+| Phase | [Previous run](https://github.com/philippegabriel/radiofrancecatalog/actions/runs/37809188962) | [Container run](https://github.com/philippegabriel/radiofrancecatalog/actions/runs/37983338671) |
+| --- | ---: | ---: |
+| Container startup, including image pulls | 21 s | 61 s |
+| Python/Airflow setup | 36 s | 0 s |
+| Remove unused FAB provider | 0 s | 1 s |
+| Download DAG | 43 s | 54 s |
+| Complete Download job | 153 s | 176 s |
+
+These are GitHub job/step timestamp measurements, excluding the separate Pages
+deployment job. They are one run per version with changing source/cache state,
+not a controlled benchmark. The current image did not improve elapsed time;
+image startup offset the saved installation time. Download remains manual-only.
+
+## Local type checking
+
 From the project root, install the development tools and run Pyright:
 
 ```bash
