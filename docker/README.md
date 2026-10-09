@@ -2,7 +2,8 @@
 
 `airflow/` defines the reusable dependency environment for GitHub Actions.
 It extends the official `apache/airflow:slim-3.3.2-python3.14` image with the project
-Python requirements, AWS CLI, Graphviz, and PostgreSQL 17 client tools.
+Python runtime requirements, AWS CLI, and PostgreSQL 17 client tools.
+Graphviz remains optional for local DAG rendering and is excluded from the image.
 PostgreSQL **server** remains a separate `postgres:17` service container.
 
 ## Files
@@ -13,14 +14,15 @@ PostgreSQL **server** remains a separate `postgres:17` service container.
 - `airflow/smoke-test.sh`: checks versions, Python imports and installed tools.
 - `../.github/workflows/airflow-image.yml`: builds, checks and optionally publishes.
 
-The build context is the repository root so `airflow/requirements.txt` remains
+The build context is the repository root so `airflow/requirements-runtime.txt` remains
 the shared dependency source. The Dockerfile-specific ignore file admits only
 that requirements file and the Docker build files. Local AWS configuration,
 credentials, transcripts, database backups, virtualenvs and DAGs are excluded.
 Runtime secrets and project code are supplied when using the image.
 
 Edit `airflow/packages.txt` to change system dependencies and the repository's
-`airflow/requirements.txt` to change Python dependencies. Package-list changes
+`airflow/requirements-runtime.txt` to change Python dependencies.
+The local `airflow/requirements.txt` includes this file and adds Graphviz. Package-list changes
 rebuild the system installation layer; Python-only changes reuse that layer.
 
 ## Build locally
@@ -88,3 +90,12 @@ PostgreSQL startup), dependency setup, DAG execution, and full job duration.
 Use the same show and note that new episodes and cache state affect DAG runtime.
 Timing and size reports remain in the summary and artifact. Download still
 checks compatibility without running migrations.
+
+## Measuring the footprint
+
+The image build runs `bash docker/measure-image.sh radiofrance-airflow:test`.
+It records uncompressed base and final image sizes, layer sizes, major directory
+sizes, the largest Python package directories, and Debian installed-package sizes
+in the job summary. These views overlap and must not be added together. Debian
+Installed-Size is package metadata in KiB; directory sizes are measured disk use.
+No credentials, project data or metadata database are mounted into this check.

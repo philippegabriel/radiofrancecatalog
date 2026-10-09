@@ -12,13 +12,13 @@ on:
     branches: [main, v2, codex/airflow-container-image]
     paths:
       - docker/**
-      - airflow/requirements.txt
+      - airflow/requirements*.txt
       - .github/workflows/airflow-image.yml
   pull_request:
     branches: [main, v2]
     paths:
       - docker/**
-      - airflow/requirements.txt
+      - airflow/requirements*.txt
       - .github/workflows/airflow-image.yml
 
 concurrency:
@@ -81,6 +81,8 @@ jobs:
             echo
             echo "Publish to GHCR: ${{ steps.image.outputs.publish }}"
           } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Measure image footprint
+        run: bash docker/measure-image.sh radiofrance-airflow:test | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Log in to GHCR
         if: steps.image.outputs.publish == 'true'
         uses: docker/login-action@v3

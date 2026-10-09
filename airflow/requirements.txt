@@ -1,4 +1,3 @@
---constraint https://raw.githubusercontent.com/apache/airflow/constraints-3.3.2/constraints-3.14.txt
-apache-airflow[postgres]==3.3.2
+-r requirements-runtime.txt
+# Optional local DAG rendering. The CI runtime does not need Graphviz.
 graphviz==0.21
-pandas

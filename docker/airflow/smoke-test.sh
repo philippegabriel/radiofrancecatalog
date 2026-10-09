@@ -3,10 +3,11 @@
 set -euo pipefail
 python -c 'import sys; assert sys.version_info[:2] == (3, 14), sys.version'
 python -c 'from importlib.metadata import version; assert version("apache-airflow") == "3.3.2"'
-python -c 'import pandas, psycopg2, requests, graphviz; from airflow.sdk import Asset, AssetAlias, DAG, task'
+python -c 'import pandas, psycopg2, requests; from airflow.sdk import Asset, AssetAlias, DAG, task'
 pip check
 aws --version
 psql --version | grep -E '^psql \(PostgreSQL\) 17\.'
 pg_dump --version | grep -E '^pg_dump \(PostgreSQL\) 17\.'
 pg_restore --version | grep -E '^pg_restore \(PostgreSQL\) 17\.'
-dot -V
+! command -v dot
+python -c 'from importlib.util import find_spec; assert find_spec("graphviz") is None'

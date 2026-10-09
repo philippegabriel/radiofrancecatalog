@@ -2,7 +2,7 @@
 # the build context. This file takes precedence for this specific Dockerfile.
 **
 !airflow/
-!airflow/requirements.txt
+!airflow/requirements-runtime.txt
 !docker/
 !docker/airflow/
 !docker/airflow/Dockerfile

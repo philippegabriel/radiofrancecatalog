@@ -22,7 +22,7 @@ RUN apt-get update \
 ENV PATH="/usr/lib/postgresql/17/bin:${PATH}"
 
 USER airflow
-COPY --chown=airflow:root airflow/requirements.txt /opt/radiofrance/requirements.txt
+COPY --chown=airflow:root airflow/requirements-runtime.txt /opt/radiofrance/requirements.txt
 RUN pip install --no-cache-dir "apache-airflow==${AIRFLOW_VERSION}" \
         -r /opt/radiofrance/requirements.txt \
     && pip check
