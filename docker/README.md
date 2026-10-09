@@ -1,7 +1,7 @@
 # Radio France Docker images
 
 `airflow/` defines the reusable dependency environment for GitHub Actions.
-It extends the official `apache/airflow:3.3.2-python3.14` image with the project
+It extends the official `apache/airflow:slim-3.3.2-python3.14` image with the project
 Python requirements, AWS CLI, Graphviz, and PostgreSQL 17 client tools.
 PostgreSQL **server** remains a separate `postgres:17` service container.
 
