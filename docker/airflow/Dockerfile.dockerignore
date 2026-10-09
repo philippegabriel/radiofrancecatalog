@@ -1,0 +1,11 @@
+# An allowlist keeps local data, credentials, snapshots and virtualenvs out of
+# the build context. This file takes precedence for this specific Dockerfile.
+**
+!airflow/
+!airflow/requirements.txt
+!docker/
+!docker/airflow/
+!docker/airflow/Dockerfile
+!docker/airflow/Dockerfile.dockerignore
+!docker/airflow/packages.txt
+!docker/airflow/smoke-test.sh

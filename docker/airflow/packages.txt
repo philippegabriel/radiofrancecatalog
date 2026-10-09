@@ -1,0 +1,3 @@
+awscli
+graphviz
+postgresql-client-17
