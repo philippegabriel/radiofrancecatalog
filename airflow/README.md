@@ -354,10 +354,10 @@ Download uses the commit-tagged GHCR image defined under `docker/`, with a
 separate PostgreSQL 17 service at hostname `postgres`. Local invocations and
 Register retain their virtualenv defaults. The job sets `RF_AIRFLOW_PYTHON`,
 `RF_AIRFLOW_COMMAND`, and `RF_DOWNLOAD_PYTHON` to the container executables.
-`PYTHONUSERBASE=/home/airflow/.local` exposes the image's installed packages to
-root job steps. The slim base omits the unused FAB provider; its uninstall
-workaround is no longer needed. Download preserves the no-migration
-compatibility check.
+The custom Python slim image installs dependencies in `/opt/venv`, available
+to both root job steps and the default airflow user. It excludes the unused FAB
+provider and inherited database/Docker clients. Download preserves the
+no-migration compatibility check.
 
 Measured Download job durations for `affaires-sensibles`:
 
@@ -411,5 +411,27 @@ uses ~115 MiB on disk. Airflow Python packages occupy ~528 MiB, including
 pandas (~74 MiB) and NumPy plus its libraries (~69 MiB). These overlapping
 measurements must not be summed into an image-size estimate.
 
-A custom Python slim base is the next candidate to avoid inherited unused
-clients. Its final size and compatibility require a separate build and test.
+The subsequent custom Python slim build avoids the inherited unused clients;
+see its measured results below.
+
+## Custom Python slim image results
+
+The image now starts from `python:3.14-slim-bookworm`, installs Airflow 3.3.2
+with the same constrained runtime requirements in `/opt/venv`, and adds only
+AWS CLI, Git, and PostgreSQL 17 clients plus their OS dependencies. It uses a
+non-root airflow user by default; CI runs steps as root for runner mounts.
+There is no upstream Airflow entrypoint. Bytecode generation is disabled and
+pip installs without compiling bytecode to avoid extra image layers.
+
+[Image build and smoke checks](https://github.com/philippegabriel/radiofrancecatalog/actions/runs/37986139093)
+passed. Uncompressed size is 703,174,369 bytes, versus 1,159,906,581 bytes
+for the Graphviz-free Airflow slim image: 39.4% smaller. The Python base itself
+is 128,992,758 bytes.
+
+[Download test for affaires-sensibles](https://github.com/philippegabriel/radiofrancecatalog/actions/runs/37986497793)
+passed, including snapshot restore/check/save and Pages deployment. Download
+job duration was 162 seconds, container initialization 37 seconds, and DAG
+execution 54 seconds. The earlier Airflow slim run took 148 seconds overall,
+53 seconds to initialize containers, and 43 seconds for its DAG. These single
+runs establish the size reduction but not an overall runtime improvement.
+No migrations were run; Download remains manual-only.
