@@ -1,6 +1,9 @@
 name: Airflow Download
 
 on:
+  push:
+    branches: [v2]
+    paths: [.github/workflows/airflow-download.yml]
   workflow_dispatch:
     inputs:
       show:
@@ -64,7 +67,7 @@ jobs:
       PGPASSWORD: airflow
       RF_AIRFLOW_PYTHON: python
       RF_AIRFLOW_COMMAND: airflow
-      RF_SHOW: ${{ inputs.show }}
+      RF_SHOW: ${{ inputs.show || 'affaires-sensibles' }}
       RF_SNAPSHOT_SCOPE: ${{ github.ref_name }}
       AIRFLOW__DATABASE__CHECK_MIGRATIONS: 'False'
     steps:
@@ -78,6 +81,9 @@ jobs:
           test -n "$AWS_ROLE" || { echo 'Set AWS_AIRFLOW_ROLE_ARN repository secret'; exit 1; }
           test -n "$RADIOFRANCE_API_KEY" || { echo 'Set OPENAPIKEY repository secret'; exit 1; }
           test -n "$AIRFLOW__CORE__FERNET_KEY" || { echo 'Set AIRFLOW_FERNET_KEY repository secret'; exit 1; }
+      - name: Match snapshot provider set
+        # The base image includes FAB; our SimpleAuthManager snapshot does not.
+        run: python -m pip uninstall --yes apache-airflow-providers-fab
       - name: Test snapshot integrity and publication
         run: python -m unittest discover -s airflow -p 'test_snapshot.py'
       - name: Authenticate to AWS
