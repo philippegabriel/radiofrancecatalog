@@ -1,14 +1,14 @@
 # Radio France Docker images
 
 `airflow/` defines the reusable dependency environment for GitHub Actions.
-It extends the official `apache/airflow:slim-3.3.2-python3.14` image with the project
-Python runtime requirements, AWS CLI, and PostgreSQL 17 client tools.
+It starts from `python:3.14-slim-bookworm` and installs the project
+Python runtime requirements, AWS CLI, Git for checkout, and PostgreSQL 17 client tools.
 Graphviz remains optional for local DAG rendering and is excluded from the image.
 PostgreSQL **server** remains a separate `postgres:17` service container.
 
 ## Files
 
-- `airflow/Dockerfile`: image definition; inherits Airflow's non-root user and entrypoint.
+- `airflow/Dockerfile`: image definition; creates an isolated /opt/venv and a non-root airflow user.
 - `airflow/packages.txt`: system packages, one package name per line (no comments).
 - `airflow/Dockerfile.dockerignore`: build-context allowlist.
 - `airflow/smoke-test.sh`: checks versions, Python imports and installed tools.
@@ -82,8 +82,10 @@ The local wrapper defaults to the virtualenv; container jobs set
 `RF_AIRFLOW_PYTHON=python` and `RF_AIRFLOW_COMMAND=airflow`.
 
 Job steps run as root so checkout and artifact actions can write runner mounts.
-The image retains its non-root default outside this workflow. The upstream
-entrypoint is bypassed in the job container.
+The image retains its non-root default outside this workflow. It has no Airflow
+entrypoint; invoke Airflow through the project wrapper or its CLI directly.
+Python dependencies live in /opt/venv and are available to both root and airflow.
+Bytecode generation is disabled and pip installs without compiling bytecode.
 
 For runtime comparisons, include container initialization (image pull and
 PostgreSQL startup), dependency setup, DAG execution, and full job duration.

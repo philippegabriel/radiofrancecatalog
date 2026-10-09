@@ -1,9 +1,14 @@
 # syntax=docker/dockerfile:1
-FROM apache/airflow:slim-3.3.2-python3.14
+FROM python:3.14-slim-bookworm
+
+ENV AIRFLOW_VERSION=3.3.2 \
+    AIRFLOW_HOME=/opt/airflow \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
 
 USER root
 COPY docker/airflow/packages.txt /opt/radiofrance/packages.txt
-# Configure PGDG explicitly: the slim image does not include PostgreSQL extras.
+# Configure the official PostgreSQL apt repository for the exact client major.
 # Install AWS CLI through apt to keep it outside Airflow's Python dependencies.
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates curl \
@@ -19,16 +24,21 @@ RUN apt-get update \
 
 # Prefer the exact client major used to create our database snapshots, even if
 # the base image also includes newer PostgreSQL client binaries.
-ENV PATH="/usr/lib/postgresql/17/bin:${PATH}"
+ENV PATH="/opt/venv/bin:/usr/lib/postgresql/17/bin:${PATH}"
+RUN python -m venv /opt/venv \
+    && useradd --uid 50000 --gid 0 --create-home --shell /bin/bash airflow \
+    && mkdir -p /opt/airflow \
+    && chown airflow:root /opt/airflow /opt/venv
 
-USER airflow
 COPY --chown=airflow:root airflow/requirements-runtime.txt /opt/radiofrance/requirements.txt
-RUN pip install --no-cache-dir "apache-airflow==${AIRFLOW_VERSION}" \
+RUN pip install --no-cache-dir --no-compile "apache-airflow==${AIRFLOW_VERSION}" \
         -r /opt/radiofrance/requirements.txt \
     && pip check
 
 COPY --chown=airflow:root docker/airflow/smoke-test.sh /opt/radiofrance/smoke-test.sh
 RUN bash /opt/radiofrance/smoke-test.sh
 
-# Keep the upstream entrypoint and non-root user. DAGs and data are supplied at
-# runtime by the repository checkout, rather than embedded in this image.
+# Standalone non-root runtime; CI overrides the user for runner-mounted files.
+# DAGs, configuration and data are supplied at runtime by repository checkout.
+USER airflow
+WORKDIR /opt/airflow

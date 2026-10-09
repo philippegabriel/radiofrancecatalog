@@ -16,11 +16,11 @@ docker run --rm -i --entrypoint bash "$image" -s <<'SHELL'
 set -euo pipefail
 echo '### Major directories (disk bytes; overlapping views)'
 echo '```text'
-du -x -B1 -s /home/airflow/.local /usr/lib /usr/local /usr/share /var/lib
+du -x -B1 -s /opt/venv /usr/lib /usr/local /usr/share /var/lib
 echo '```'
 echo '### Largest Airflow Python package directories (disk bytes)'
 echo '```text'
-du -x -B1 -s /home/airflow/.local/lib/python*/site-packages/* | sort -n | tail -25
+du -x -B1 -s /opt/venv/lib/python*/site-packages/* | sort -n | tail -25
 echo '```'
 echo '### Largest Debian packages (Installed-Size in KiB)'
 echo '```text'
