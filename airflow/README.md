@@ -348,35 +348,38 @@ HTML escaping behavior). There is no separate HTML table renderer.
 Catalogue tests now require access to radiofrance through `RF_CATALOGUE_DSN` or
 the local default. They operate solely on temporary tables.
 
-## Python type checking
-
-### GitHub Download container
+## GitHub Download container
 
 Download uses the commit-tagged GHCR image defined under `docker/`, with a
 separate PostgreSQL 17 service at hostname `postgres`. Local invocations and
 Register retain their virtualenv defaults. The job sets `RF_AIRFLOW_PYTHON`,
 `RF_AIRFLOW_COMMAND`, and `RF_DOWNLOAD_PYTHON` to the container executables.
 `PYTHONUSERBASE=/home/airflow/.local` exposes the image's installed packages to
-root job steps. The job removes the unused FAB provider bundled in the upstream
-image because its additional schema is absent from the existing SimpleAuthManager
-snapshot. This preserves the no-migration compatibility check.
+root job steps. The slim base omits the unused FAB provider; its uninstall
+workaround is no longer needed. Download preserves the no-migration
+compatibility check.
 
 Measured Download job durations for `affaires-sensibles`:
 
-| Phase | [Previous run](https://github.com/philippegabriel/radiofrancecatalog/actions/runs/37809188962) | [Container run](https://github.com/philippegabriel/radiofrancecatalog/actions/runs/37983338671) |
-| --- | ---: | ---: |
-| Container startup, including image pulls | 21 s | 61 s |
-| Python/Airflow setup | 36 s | 0 s |
-| Remove unused FAB provider | 0 s | 1 s |
-| Download DAG | 43 s | 54 s |
-| Complete Download job | 153 s | 176 s |
+| Phase | [Virtualenv](https://github.com/philippegabriel/radiofrancecatalog/actions/runs/37809188962) | [Regular image](https://github.com/philippegabriel/radiofrancecatalog/actions/runs/37983338671) | [Slim image](https://github.com/philippegabriel/radiofrancecatalog/actions/runs/37984691302) |
+| --- | ---: | ---: | ---: |
+| Container startup, including image pulls | 21 s | 61 s | 53 s |
+| Python/Airflow setup | 36 s | 0 s | 0 s |
+| Remove unused FAB provider | 0 s | 1 s | 0 s |
+| Download DAG | 43 s | 54 s | 43 s |
+| Complete Download job | 153 s | 176 s | 148 s |
+
+Docker-measured uncompressed image size fell from 2,607,141,053 bytes to
+1,229,874,880 bytes (53% smaller). The slim image build and smoke checks passed:
+[build run](https://github.com/philippegabriel/radiofrancecatalog/actions/runs/37984332467).
 
 These are GitHub job/step timestamp measurements, excluding the separate Pages
 deployment job. They are one run per version with changing source/cache state,
-not a controlled benchmark. The current image did not improve elapsed time;
-image startup offset the saved installation time. Download remains manual-only.
+not a controlled benchmark. The slim run was 28 seconds faster than the regular
+image and 5 seconds faster than the virtualenv run. Image startup still accounts
+for a substantial part of runtime. Download remains manual-only.
 
-## Local type checking
+## Python type checking
 
 From the project root, install the development tools and run Pyright:
 
