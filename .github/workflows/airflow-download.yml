@@ -1,9 +1,6 @@
 name: Airflow Download
 
 on:
-  push:
-    branches: [v2]
-    paths: [.github/workflows/airflow-download.yml]
   workflow_dispatch:
     inputs:
       show:
@@ -67,7 +64,7 @@ jobs:
       PGPASSWORD: airflow
       RF_AIRFLOW_PYTHON: python
       RF_AIRFLOW_COMMAND: airflow
-      RF_SHOW: ${{ inputs.show || 'affaires-sensibles' }}
+      RF_SHOW: ${{ inputs.show }}
       RF_SNAPSHOT_SCOPE: ${{ github.ref_name }}
       AIRFLOW__DATABASE__CHECK_MIGRATIONS: 'False'
     steps:
