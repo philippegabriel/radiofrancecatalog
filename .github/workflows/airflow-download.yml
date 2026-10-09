@@ -1,6 +1,9 @@
 name: Airflow Download
 
 on:
+  push:
+    branches: [v2]
+    paths: [.github/workflows/airflow-download.yml]
   workflow_dispatch:
     inputs:
       show:
@@ -24,11 +27,21 @@ concurrency:
 permissions:
   contents: read
   id-token: write
+  packages: read
 
 jobs:
   download:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    container:
+      image: ghcr.io/philippegabriel/radiofrance-airflow:ccebae87543e9c8d42c9c6346930a5d5dc721d54
+      options: --user root --entrypoint ""
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
     services:
       postgres:
         image: postgres:17
@@ -36,8 +49,6 @@ jobs:
           POSTGRES_USER: airflow
           POSTGRES_PASSWORD: airflow
           POSTGRES_DB: airflow
-        ports:
-          - 5432:5432
         options: >-
           --health-cmd "pg_isready -U airflow -d airflow"
           --health-interval 10s
@@ -46,11 +57,16 @@ jobs:
     env:
       RF_S3_BUCKET: ${{ secrets.RF_S3_BUCKET }}
       RF_S3_REGION: eu-west-2
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@localhost:5432/airflow
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
       AIRFLOW__CORE__FERNET_KEY: ${{ secrets.AIRFLOW_FERNET_KEY }}
       RADIOFRANCE_API_KEY: ${{ secrets.OPENAPIKEY }}
-      RF_CATALOGUE_DSN: dbname=radiofrance user=airflow password=airflow host=localhost port=5432
-      RF_SHOW: ${{ inputs.show }}
+      RF_CATALOGUE_DSN: dbname=radiofrance user=airflow password=airflow host=postgres port=5432
+      PGHOST: postgres
+      PGUSER: airflow
+      PGPASSWORD: airflow
+      RF_AIRFLOW_PYTHON: python
+      RF_AIRFLOW_COMMAND: airflow
+      RF_SHOW: ${{ inputs.show || 'affaires-sensibles' }}
       RF_SNAPSHOT_SCOPE: ${{ github.ref_name }}
       AIRFLOW__DATABASE__CHECK_MIGRATIONS: 'False'
     steps:
@@ -64,18 +80,8 @@ jobs:
           test -n "$AWS_ROLE" || { echo 'Set AWS_AIRFLOW_ROLE_ARN repository secret'; exit 1; }
           test -n "$RADIOFRANCE_API_KEY" || { echo 'Set OPENAPIKEY repository secret'; exit 1; }
           test -n "$AIRFLOW__CORE__FERNET_KEY" || { echo 'Set AIRFLOW_FERNET_KEY repository secret'; exit 1; }
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.14'
-          cache: pip
-          cache-dependency-path: airflow/requirements.txt
-      - name: Install Airflow
-        run: |
-          python -m venv venv/airflow
-          venv/airflow/bin/python -m pip install -r airflow/requirements.txt
-          venv/airflow/bin/python -m pip check
       - name: Test snapshot integrity and publication
-        run: venv/airflow/bin/python -m unittest discover -s airflow -p 'test_snapshot.py'
+        run: python -m unittest discover -s airflow -p 'test_snapshot.py'
       - name: Authenticate to AWS
         uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -87,7 +93,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/catalogues"
           echo "RF_CATALOGUE_BASELINE_DIR=$RUNNER_TEMP/catalogues" >> "$GITHUB_ENV"
           echo "RF_CATALOGUE_OUTPUT_DIR=$RUNNER_TEMP/updated-catalogues" >> "$GITHUB_ENV"
-          venv/airflow/bin/python - <<'PYCODE'
+          python - <<'PYCODE'
           import os, subprocess, sys
           from pathlib import Path
           sys.path.insert(0, 'airflow/dags')
@@ -100,20 +106,16 @@ jobs:
           PYCODE
           echo "S3 catalogue downloads: $(( $(date +%s) - start )) seconds" | tee -a "$GITHUB_STEP_SUMMARY" "$RF_METRICS_REPORT"
       - name: Create lightweight catalogue database
-        env:
-          PG_CONTAINER: ${{ job.services.postgres.id }}
-        run: docker exec "$PG_CONTAINER" createdb -U airflow radiofrance
+        run: createdb radiofrance
       - name: Test catalogue SQL and merge
-        run: venv/airflow/bin/python -m unittest discover -s airflow -p 'test_catalogue.py'
+        run: python -m unittest discover -s airflow -p 'test_catalogue.py'
       - name: Test transcript downloads
-        run: venv/airflow/bin/python -m unittest discover -s airflow -p 'test_transcripts.py'
+        run: python -m unittest discover -s airflow -p 'test_transcripts.py'
       - name: Test episode references and cutoff
-        run: venv/airflow/bin/python -m unittest discover -s airflow -p 'test_episodes.py'
+        run: python -m unittest discover -s airflow -p 'test_episodes.py'
       - name: Restore versioned Airflow snapshot
         id: restore
-        env:
-          PG_CONTAINER: ${{ job.services.postgres.id }}
-        run: venv/airflow/bin/python airflow/snapshot.py restore "$RUNNER_TEMP/metadata.dump"
+        run: python airflow/snapshot.py restore "$RUNNER_TEMP/metadata.dump"
       - name: Check schema compatibility without migrating
         id: schema
         run: |
@@ -121,8 +123,6 @@ jobs:
           airflow/run db check-migrations --migration-wait-timeout 0
           echo "Schema compatibility check: $(( $(date +%s) - start )) seconds" | tee -a "$GITHUB_STEP_SUMMARY" "$RF_METRICS_REPORT"
       - name: Measure restored Airflow database
-        env:
-          PG_CONTAINER: ${{ job.services.postgres.id }}
         run: bash airflow/measure_database.sh 'After snapshot restore'
       - name: Run Download DAG
         id: download
@@ -136,14 +136,10 @@ jobs:
       - name: Measure Airflow database after Download
         id: backup
         if: always() && steps.restore.outcome == 'success' && steps.schema.outcome == 'success' && (steps.download.outcome == 'success' || steps.download.outcome == 'failure')
-        env:
-          PG_CONTAINER: ${{ job.services.postgres.id }}
         run: bash airflow/measure_database.sh 'After Download DAG' "$RUNNER_TEMP/metadata.dump"
       - name: Publish updated snapshot including completed work on failure
         if: always() && steps.backup.outcome == 'success'
-        env:
-          PG_CONTAINER: ${{ job.services.postgres.id }}
-        run: venv/airflow/bin/python airflow/snapshot.py save "$RUNNER_TEMP/metadata.dump"
+        run: python airflow/snapshot.py save "$RUNNER_TEMP/metadata.dump"
       - name: Preserve timing and size statistics
         if: always()
         uses: actions/upload-artifact@v6
@@ -164,7 +160,7 @@ jobs:
 
       - name: Prepare complete Pages site
         run: |
-          venv/airflow/bin/python - <<'PYCODE'
+          python - <<'PYCODE'
           import os, shutil
           from pathlib import Path
           # The DAG publishes a copy here only after S3 publication succeeds.
@@ -173,7 +169,7 @@ jobs:
               raise RuntimeError('Successful DAG did not provide its catalogue output')
           shutil.copyfile(source, Path(os.environ['RF_CATALOGUE_BASELINE_DIR']) / source.name)
           PYCODE
-          venv/airflow/bin/python airflow/build_pages.py "$RF_CATALOGUE_BASELINE_DIR" site
+          python airflow/build_pages.py "$RF_CATALOGUE_BASELINE_DIR" site
       - name: Upload Pages site
         uses: actions/upload-pages-artifact@v5
         with:

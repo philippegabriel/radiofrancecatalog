@@ -35,9 +35,16 @@ def aws(*arguments: str) -> None:
     subprocess.run(['aws', *arguments, '--region', os.environ.get('RF_S3_REGION', 'eu-west-2')], check=True)
 
 
+def postgres_command(program: str) -> list[str]:
+    """Use host Docker clients in Register, or installed clients in a job container."""
+    if container := os.environ.get('PG_CONTAINER'):
+        return ['docker', 'exec', '-i', container, program]
+    return [program]
+
+
 def postgres_major() -> str:
     """Read the service version through PostgreSQL's supported SQL interface."""
-    result = subprocess.run(['docker', 'exec', os.environ['PG_CONTAINER'], 'psql',
+    result = subprocess.run(postgres_command('psql') + [
                              '-XAt', '-U', 'airflow', '-d', 'airflow', '-c',
                              'SHOW server_version_num'], check=True, capture_output=True, text=True)
     return str(int(result.stdout.strip()) // 10000)
@@ -93,7 +100,7 @@ def main() -> None:
             report('S3 snapshot download and verification', started)
             started = time.monotonic()
             with dump.open('rb') as stream:
-                subprocess.run(['docker', 'exec', '-i', os.environ['PG_CONTAINER'], 'pg_restore',
+                subprocess.run(postgres_command('pg_restore') + [
                                 '-U', 'airflow', '-d', 'airflow', '--no-owner', '--no-acl',
                                 '--exit-on-error'], stdin=stream, check=True)
             report('PostgreSQL snapshot restore', started)

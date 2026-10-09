@@ -3,7 +3,10 @@
 set -euo pipefail
 
 phase=${1:?Supply a measurement label}
-: "${PG_CONTAINER:?Supply the PostgreSQL service container ID}"
+pg_command=()
+if [[ -n "${PG_CONTAINER:-}" ]]; then
+    pg_command=(docker exec -i "$PG_CONTAINER")
+fi
 : "${RUNNER_TEMP:?Supply a temporary directory}"
 : "${GITHUB_STEP_SUMMARY:?Supply the job summary path}"
 
@@ -20,7 +23,7 @@ trap cleanup EXIT
     echo "### Airflow database size: $phase"
     echo
     echo '```text'
-    docker exec -i "$PG_CONTAINER" psql -X -U airflow -d airflow -v ON_ERROR_STOP=1 <<'SQL'
+    "${pg_command[@]}" psql -X -U airflow -d airflow -v ON_ERROR_STOP=1 <<'SQL'
 SELECT pg_database_size(current_database()) AS database_bytes,
        pg_size_pretty(pg_database_size(current_database())) AS database_size;
 
@@ -35,7 +38,7 @@ SQL
     echo '```'
     echo
     start=$(date +%s)
-    docker exec "$PG_CONTAINER" pg_dump -U airflow -d airflow \
+    "${pg_command[@]}" pg_dump -U airflow -d airflow \
         --format=custom --compress=6 --no-owner --no-acl > "$backup"
     elapsed=$(( $(date +%s) - start ))
     echo "Compressed custom-format pg_dump (compression level 6): $(stat -c %s "$backup") bytes"

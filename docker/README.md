@@ -72,8 +72,19 @@ chosen separately. The workflow does not change package visibility automatically
 
 ## Adopting the image
 
-This branch introduces image building only; Register and Download continue to
-use their existing virtualenv installation. The next integration step is to run
-those jobs in the tested image, use hostname `postgres` for the database service,
-and replace host-side `docker exec` and `venv/airflow/bin/python` assumptions
-with direct PostgreSQL client and Python calls inside the job container.
+Download uses the published image pinned to its full commit tag, with
+`packages: read` and `GITHUB_TOKEN` credentials. PostgreSQL remains a separate
+service at hostname `postgres`. Register still uses its host virtualenv;
+snapshot and measurement helpers support both execution modes.
+The local wrapper defaults to the virtualenv; container jobs set
+`RF_AIRFLOW_PYTHON=python` and `RF_AIRFLOW_COMMAND=airflow`.
+
+Job steps run as root so checkout and artifact actions can write runner mounts.
+The image retains its non-root default outside this workflow. The upstream
+entrypoint is bypassed in the job container.
+
+For runtime comparisons, include container initialization (image pull and
+PostgreSQL startup), dependency setup, DAG execution, and full job duration.
+Use the same show and note that new episodes and cache state affect DAG runtime.
+Timing and size reports remain in the summary and artifact. Download still
+checks compatibility without running migrations.

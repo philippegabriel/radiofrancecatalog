@@ -14,6 +14,13 @@ import snapshot
 
 
 class SnapshotTests(unittest.TestCase):
+    def test_client_routing_for_host_and_job_container(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(snapshot.postgres_command('pg_restore'), ['pg_restore'])
+        with patch.dict(os.environ, {'PG_CONTAINER': 'service'}):
+            self.assertEqual(snapshot.postgres_command('psql'),
+                             ['docker', 'exec', '-i', 'service', 'psql'])
+
     def test_verified_snapshot_restores_without_migration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             dump = Path(directory) / 'metadata.dump'
