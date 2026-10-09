@@ -394,3 +394,22 @@ and Airflow dependencies from `venv/airflow`, using a consistent import search
 path to avoid mixing NumPy type definitions. Both environments must
 be installed for a complete local check. This is an offline static check;
 it does not run downloads, load an embedding model, or access PostgreSQL.
+
+## Graphviz-free image footprint
+
+[Build and footprint report](https://github.com/philippegabriel/radiofrancecatalog/actions/runs/37985555380)
+passed smoke checks and publication. Download now pins that image. Graphviz is
+excluded from both OS packages and runtime Python requirements; the local
+Airflow requirements still include its Python package for optional DAG rendering.
+
+Uncompressed size is 1,159,906,581 bytes, down from 1,229,874,880 bytes
+(69,968,299 bytes saved, 5.7%). The upstream slim base is 789,228,995 bytes.
+Measured Debian Installed-Size includes MariaDB clients (~76 MiB), Docker CLI
+(~45 MiB), and PostgreSQL 18 client (~11 MiB), none needed by Download.
+AWS CLI itself reports ~92 MiB installed; its system Python package directory
+uses ~115 MiB on disk. Airflow Python packages occupy ~528 MiB, including
+pandas (~74 MiB) and NumPy plus its libraries (~69 MiB). These overlapping
+measurements must not be summed into an image-size estimate.
+
+A custom Python slim base is the next candidate to avoid inherited unused
+clients. Its final size and compatibility require a separate build and test.

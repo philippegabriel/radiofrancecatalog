@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     container:
-      image: ghcr.io/philippegabriel/radiofrance-airflow:acb7f24d4fc86158e7155ed9d1756e849d424c40
+      image: ghcr.io/philippegabriel/radiofrance-airflow:bee764ba980885d961586d2dd2ef086abba0315b
       options: --user root --entrypoint ""
       credentials:
         username: ${{ github.actor }}
