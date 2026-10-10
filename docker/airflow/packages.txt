@@ -1,3 +1,0 @@
-awscli
-postgresql-client-17
-git
