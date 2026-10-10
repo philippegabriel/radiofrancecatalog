@@ -435,3 +435,28 @@ execution 54 seconds. The earlier Airflow slim run took 148 seconds overall,
 53 seconds to initialize containers, and 43 seconds for its DAG. These single
 runs establish the size reduction but not an overall runtime improvement.
 No migrations were run; Download remains manual-only.
+
+## Pandas-free runtime image results
+
+The runtime requirements no longer include pandas. NumPy is also absent;
+image smoke checks explicitly verify both packages are missing. HTML generation
+uses the standard-library renderer in `csv2html.py`.
+
+[Image build and smoke checks](https://github.com/philippegabriel/radiofrancecatalog/actions/runs/38054888273)
+passed and the image was published. Docker reports 607,012,310 bytes
+uncompressed, down from 703,174,369 bytes: 96,162,059 bytes (13.7%) smaller.
+Download pins the tested commit-tagged image.
+
+[Download test for affaires-sensibles](https://github.com/philippegabriel/radiofrancecatalog/actions/runs/38055053247)
+passed, including snapshot restore/check/save and HTML generation.
+
+| Measurement | Previous Python slim image | Without pandas/NumPy |
+| --- | ---: | ---: |
+| Uncompressed image size | 703,174,369 bytes | 607,012,310 bytes |
+| Container initialization | 37 s | 35 s |
+| Download DAG execution | 54 s | 49 s |
+| Complete Download job | 162 s | 138 s |
+
+These are single runs with varying network and incremental work, so the
+24-second overall improvement cannot be attributed entirely to the package
+removal. Download remains manual-only and performs no database migrations.
