@@ -1,6 +1,9 @@
 name: Airflow Download
 
 on:
+  push:
+    branches: [v2]
+    paths: [.github/workflows/airflow-download.yml]
   workflow_dispatch:
     inputs:
       show:
@@ -31,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     container:
-      image: ghcr.io/philippegabriel/radiofrance-airflow:6f9f8b8de3a459da8dfff9c830de2f5a75060241
+      image: ghcr.io/philippegabriel/radiofrance-airflow:70b6f5c7cd9136ccda6208ad5f8074aaea980590
       options: --user root --entrypoint ""
       credentials:
         username: ${{ github.actor }}
@@ -64,7 +67,7 @@ jobs:
       RF_DOWNLOAD_PYTHON: python
       RF_AIRFLOW_PYTHON: python
       RF_AIRFLOW_COMMAND: airflow
-      RF_SHOW: ${{ inputs.show }}
+      RF_SHOW: ${{ inputs.show || 'affaires-sensibles' }}
       RF_SNAPSHOT_SCOPE: ${{ github.ref_name }}
       AIRFLOW__DATABASE__CHECK_MIGRATIONS: 'False'
     steps:
