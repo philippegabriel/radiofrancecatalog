@@ -1,9 +1,6 @@
 name: Airflow Download
 
 on:
-  push:
-    branches: [v2]
-    paths: [.github/workflows/airflow-download.yml]
   workflow_dispatch:
     inputs:
       show:
@@ -53,7 +50,7 @@ jobs:
       AIRFLOW__CORE__FERNET_KEY: ${{ secrets.AIRFLOW_FERNET_KEY }}
       RADIOFRANCE_API_KEY: ${{ secrets.OPENAPIKEY }}
       RF_CATALOGUE_DSN: dbname=radiofrance user=airflow password=airflow host=localhost port=5432
-      RF_SHOW: ${{ inputs.show || 'affaires-sensibles' }}
+      RF_SHOW: ${{ inputs.show }}
       RF_SNAPSHOT_SCOPE: ${{ github.ref_name }}
       AIRFLOW__DATABASE__CHECK_MIGRATIONS: 'False'
     steps:
