@@ -34,7 +34,8 @@ class TranscriptTests(unittest.TestCase):
             events = MagicMock()
             transcript = {'transcript': [{'start': 0, 'end': 1, 'text': 'bonjour'}]}
             with patch.dict(os.environ, environment), patch.object(download_dag, 'fetch_transcript', return_value=transcript) as fetch, patch.object(download_dag, 'aws') as upload:
-                download_dag.download_transcripts.function(state, events)
+                uploaded = download_dag.download_transcripts.function(state, events)
+            self.assertEqual(uploaded, ['s3://test-bucket/data/transcripts/new_5.json'])
             fetch.assert_called_once_with('new')
             source = root / 'transcripts' / 'new_5.json'
             self.assertEqual(json.loads(source.read_text()), transcript)
@@ -61,3 +62,10 @@ class TranscriptTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class HandoffTests(unittest.TestCase):
+    def test_only_requested_nonempty_handoffs(self) -> None:
+        self.assertFalse(download_dag.should_transform.function([], {'transform': True}))
+        self.assertFalse(download_dag.should_transform.function(['source'], {'transform': False}))
+        self.assertTrue(download_dag.should_transform.function(['source'], {'transform': True}))

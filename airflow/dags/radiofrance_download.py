@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Protocol, TypedDict
 
 from airflow.sdk import Asset, AssetAlias, DAG, Param, task
+from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.sdk.definitions.param import ParamsDict
 from radiofrance_catalogue.catalogue import SHOWS, merge, read_rows
 from radiofrance_catalogue.episodes import EPISODES, EpisodeEvent, InletEvents, record_episode_rows
@@ -74,6 +75,9 @@ no catalogue scratch database is required by this DAG.
 RF_TRANSCRIPT_DIR optionally selects the local JSON directory (default transcripts/).
 There are no transcript limits, cache scans, or automatic recovery of earlier
 missed downloads. A future manually invoked DAG will handle recovery.
+Set transform=true to pass uploaded transcript URIs to radiofrance_transform.
+This requires a running scheduler and an embedding server configured for Transform.
+The default remains false until that server is provisioned. Empty lists skip the handoff.
 See airflow/README.md for CLI examples and required permissions.
 """,
     schedule=None,
@@ -81,6 +85,7 @@ See airflow/README.md for CLI examples and required permissions.
     max_active_runs=1,
     params=ParamsDict({
         'show': Param('affaires-sensibles', type='string', enum=list(SHOWS)),
+        'transform': Param(False, type='boolean', description='Trigger Transform; requires a scheduler and configured embedding server'),
     }),
     tags=['radiofrance', 'download'],
 ):
@@ -206,7 +211,7 @@ See airflow/README.md for CLI examples and required permissions.
         )
 
     @task(outlets=[TRANSCRIPTS])
-    def download_transcripts(state: PublishedState, outlet_events: OutletEvents) -> None:
+    def download_transcripts(state: PublishedState, outlet_events: OutletEvents) -> list[str]:
         """Download and publish transcripts for this run's newly fetched episodes.
 
         Read IDs from updates.csv, fetch each transcript using the existing API
@@ -214,10 +219,12 @@ See airflow/README.md for CLI examples and required permissions.
         Upload each JSON to data/transcripts/<episode-id>.json and emit an asset
         event with its show, episode ID and content hash. Errors fail the task;
         previous missing downloads are left to a future manual recovery DAG.
+        Return only successfully uploaded S3 transcript URIs for Transform.
         """
         directory = Path(os.environ.get('RF_TRANSCRIPT_DIR', str(PROJECT / 'transcripts')))
         directory.mkdir(parents=True, exist_ok=True)
         rows = read_rows(Path(state['workspace']) / 'updates.csv', state['show'])
+        uploaded: list[str] = []
         for row in rows:
             episode_id = row['id']
             transcript = fetch_transcript(aod_uuid(episode_id))
@@ -234,6 +241,8 @@ See airflow/README.md for CLI examples and required permissions.
                 extra={'show': state['show'], 'episode_id': episode_id,
                        'sha256': hashlib.sha256(path.read_bytes()).hexdigest()},
             )
+            uploaded.append(destination)
+        return uploaded
 
     # Airflow injects context arguments and resolves XComArg values at runtime;
     # its decorator annotations retain the underlying Python function signature.
@@ -244,3 +253,21 @@ See airflow/README.md for CLI examples and required permissions.
     _ = published >> references
     transcripts = download_transcripts(catalogue)  # pyright: ignore[reportCallIssue, reportArgumentType]
     _ = references >> transcripts
+
+    @task.short_circuit
+    def should_transform(sources: list[str], params: Mapping[str, object]) -> bool:
+        """Allow the handoff only when requested and successful uploads exist.
+
+        Read the transform flag; return false to skip triggering an empty run.
+        This does not inspect S3 or discover past missing outputs.
+        """
+        return params['transform'] is True and bool(sources)
+
+    handoff = should_transform(transcripts)  # pyright: ignore[reportCallIssue, reportArgumentType]
+    trigger = TriggerDagRunOperator(
+        task_id='trigger_transform', trigger_dag_id='radiofrance_transform',
+        trigger_run_id='download__{{ run_id }}',
+        conf={'transcripts': transcripts}, wait_for_completion=False,
+        skip_when_already_exists=True,
+    )
+    _ = handoff >> trigger

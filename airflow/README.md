@@ -363,3 +363,50 @@ and Airflow dependencies from `venv/airflow`, using a consistent import search
 path to avoid mixing NumPy type definitions. Both environments must
 be installed for a complete local check. This is an offline static check;
 it does not run downloads, load an embedding model, or access PostgreSQL.
+
+## Transform DAG
+
+`radiofrance_transform` accepts `{"transcripts": ["s3://<bucket>/data/transcripts/<episode-id>.json"]}`.
+It does no discovery: Download returns the successful uploads from its current
+updates and passes that list when `transform=true`. Empty lists do not trigger
+Transform. The default flag is false while embedding infrastructure is being
+provisioned, preserving existing Download-only GitHub runs.
+
+Mapped chunk tasks retrieve transcripts from S3, invoke the existing
+`chunk_json_to_csv.py` and publish `data/chunks/<episode-id>.csv`. Mapped embedding
+tasks retrieve those chunk CSVs, embed each chunk via the persistent API, and
+publish `data/embeddings/<episode-id>.csv`. Each task emits its own output asset
+event with its source URI and checksum. S3 handoff supports different workers;
+a failed embedding task does not invalidate an already completed chunk event. Embedding
+events also record the model and dimensions. Local files are written atomically
+under `data/airflow/transforms/<run-hash>/<episode-id>/`. Tasks run serially by
+default; no model reloads or file batching are needed. Repeating an input rewrites
+its output; it does not consult historical assets or recover unrelated failures.
+
+The default endpoint is `http://127.0.0.1:8081/v1/embeddings`. Set
+`RF_EMBEDDING_URL` on the worker to override it with a full `/v1/embeddings` URL. See [embedding server setup](../embeddings/README.md). Keep the existing
+E5 model, `passage:` prefix, mean pooling and normalized 384-dimensional output.
+There is no database import. AWS credentials require reads under `data/transcripts/`
+and writes under `data/chunks/` and `data/embeddings/`. This change does not update
+GitHub IAM permissions or start a server on a GitHub runner.
+
+With a running scheduler and server, trigger Download with:
+
+```bash
+airflow/run dags trigger radiofrance_download --conf '{"show":"affaires-sensibles","transform":true}'
+```
+
+`airflow dags test` executes one DAG synchronously; it does not run a scheduler
+for a child DAG. For a local smoke test, provide a known transcript explicitly:
+
+```bash
+export RF_EMBEDDING_URL=http://127.0.0.1:8081/v1/embeddings
+airflow/run dags test radiofrance_transform --dagfile-path "$PWD/airflow/dags/radiofrance_transform.py" \
+  --conf '{"transcripts":["s3://<bucket>/data/transcripts/<episode-id>.json"]}'
+```
+
+Run offline contract tests with:
+
+```bash
+venv/airflow/bin/python -m unittest discover -s airflow -p 'test_transform.py'
+```

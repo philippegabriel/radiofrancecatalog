@@ -1,0 +1,16 @@
+diff --git a/conversion/bert.py b/conversion/bert.py
+--- a/conversion/bert.py
++++ b/conversion/bert.py
+@@ -37,6 +37,12 @@ class BertModel(TextModel):
+             self.gguf_writer.add_classifier_output_labels([v for k, v in sorted(self.cls_out_labels.items())])
+ 
+     def set_vocab(self):
++        # multilingual-e5-small uses BERT position embeddings but an XLM-R tokenizer.
++        # Reuse tokenizer conversion without XLM-R's position offset adjustment.
++        if self.hparams.get("tokenizer_class") == "XLMRobertaTokenizer":
++            self._xlmroberta_set_vocab()
++            return
++
+         tokens, toktypes, tokpre = self.get_vocab_base()
+         self.vocab_size = len(tokens)
+ 
