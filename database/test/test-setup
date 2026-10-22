@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Exercise first-start SQL on a disposable cluster, never the host service.
+set -euo pipefail
+setup_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+database_dir="$(cd -- "$setup_dir/.." && pwd)"
+pg_bin="${PG_BINDIR:-$(pg_config --bindir)}"
+test_root="$(mktemp -d /tmp/radiofrance-db-setup.XXXXXX)"
+cleanup() {
+  "$pg_bin/pg_ctl" -D "$test_root/data" -m immediate stop >/dev/null 2>&1 || true
+  rm -rf -- "$test_root"
+}
+trap cleanup EXIT
+export PGHOST="$test_root" PGPORT=55439 PGUSER=airflow PGDATABASE=postgres PGPASSWORD=airflow-dev
+printf '%s\n' "$PGPASSWORD" > "$test_root/password"
+chmod 600 "$test_root/password"
+"$pg_bin/initdb" -D "$test_root/data" -U airflow --auth-local=scram-sha-256 \
+  --auth-host=scram-sha-256 --pwfile="$test_root/password" > "$test_root/init.log"
+"$pg_bin/pg_ctl" -D "$test_root/data" -l "$test_root/server.log" \
+  -o "-k $test_root -p $PGPORT -c listen_addresses=''" -w start > /dev/null || {
+    cat "$test_root/server.log" >&2
+    exit 1
+  }
+"$pg_bin/createdb" airflow
+export RF_DATABASE_PASSWORD="test'quoted-password"
+for script in "$database_dir"/init/*.sql; do
+  psql -X -v ON_ERROR_STOP=1 -d airflow -f "$script" >> "$test_root/first.log"
+done
+psql -X -v ON_ERROR_STOP=1 -d airflow -c 'CREATE TABLE setup_preservation_probe (id integer); INSERT INTO setup_preservation_probe VALUES (42)' > /dev/null
+"$pg_bin/pg_ctl" -D "$test_root/data" -m fast -w restart > /dev/null
+[[ "$(psql -XAt -d airflow -c 'SELECT id FROM setup_preservation_probe')" = 42 ]]
+[[ "$(psql -XAt -d radiofrance -c "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tableowner <> 'radiofrance'")" = 0 ]]
+[[ "$(psql -XAt -d radiofrance -c "SELECT to_regclass('public.import_run') IS NOT NULL")" = t ]]
+[[ "$(psql -XAt -c "SELECT NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls) FROM pg_roles WHERE rolname='radiofrance'")" = t ]]
+PGUSER=radiofrance PGPASSWORD="$RF_DATABASE_PASSWORD" psql -X -v ON_ERROR_STOP=1 -d radiofrance <<'SQL' > /dev/null
+BEGIN;
+CREATE TABLE setup_vector_probe (embedding vector(256));
+INSERT INTO setup_vector_probe VALUES (array_fill(1::real, ARRAY[256])::vector);
+SELECT vector_dims(embedding) FROM setup_vector_probe;
+ROLLBACK;
+SQL
+if PGUSER=radiofrance PGPASSWORD="$RF_DATABASE_PASSWORD" psql -X -d airflow -c 'SELECT 1' > "$test_root/denied.log" 2>&1; then
+  echo 'Application login unexpectedly connected to Airflow.' >&2
+  exit 1
+fi
+echo 'Passed: first-start SQL, restart persistence, application login, vector(256), restricted role and Airflow access denied.'
+if [[ "${RF_VALIDATE_LOADER:-0}" = 1 ]]; then
+  cd "$database_dir/.."
+  (
+    export PGUSER=radiofrance PGDATABASE=radiofrance PGPASSWORD="$RF_DATABASE_PASSWORD"
+    export RF_TEST_DATABASE_DSN='' RF_CATALOGUE_DSN=''
+    venv/airflow/bin/python -m unittest discover -s database/test -p 'test_*.py'
+    venv/airflow/bin/python -m unittest discover -s airflow/test -p 'test_*.py'
+  )
+fi

@@ -1,0 +1,120 @@
+name: radiofrance
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.7-pg17-trixie
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${RF_AIRFLOW_DB_PASSWORD:-airflow-dev}
+      POSTGRES_DB: airflow
+      RF_DATABASE_PASSWORD: ${RF_DATABASE_PASSWORD:-radiofrance-dev}
+    volumes:
+      - radiofrance-db-volume:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:${RF_DATABASE_PORT:-55432}:5432"
+    healthcheck:
+      # Initialization uses a socket-only server; wait for the final TCP server.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U airflow -d airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  database-loader:
+    image: radiofrance-database:pilot
+    build:
+      context: .
+      dockerfile: database/Dockerfile
+    profiles: [jobs]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: radiofrance
+      PGUSER: radiofrance
+      PGPASSWORD: ${RF_DATABASE_PASSWORD:-radiofrance-dev}
+    volumes:
+      - ./data/download-pilot:/input/downloads:ro
+      - ./data/chunk-pilot:/input/chunks:ro
+      - ./data/embedding-pilot:/input/embeddings:ro
+    restart: "no"
+
+  airflow:
+    image: radiofrance-airflow:dev
+    build:
+      context: ./airflow
+    command: [python, /opt/airflow-bootstrap/ui_auth.py]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${RF_AIRFLOW_DB_PASSWORD:-airflow-dev}@postgres:5432/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__PARALLELISM: "2"
+      AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "2"
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: ${AIRFLOW_UI_USERNAME:-admin}:admin
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/ui-passwords.json
+      AIRFLOW_UI_USERNAME: ${AIRFLOW_UI_USERNAME:-admin}
+      AIRFLOW_UI_PASSWORD: ${AIRFLOW_UI_PASSWORD:?Set AIRFLOW_UI_PASSWORD in .env}
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://localhost:8080/execution/
+      AIRFLOW__API__HOST: 0.0.0.0
+      AIRFLOW__API__PORT: "8080"
+      RF_PROJECT_ROOT: ${RF_PROJECT_ROOT:-}
+      RF_HF_HUB_CACHE: ${RF_HF_HUB_CACHE:-}
+      RF_UID: ${RF_UID:-1000}
+      RF_GID: ${RF_GID:-1000}
+      RF_DOCKER_NETWORK: ${RF_DOCKER_NETWORK:-radiofrance_default}
+      RF_DATABASE_HOST: postgres
+      RF_DATABASE_PORT: "5432"
+      RF_DATABASE_PASSWORD: ${RF_DATABASE_PASSWORD:-radiofrance-dev}
+      PYTHONPATH: /opt/radiofrance/lib
+    group_add:
+      - "${RF_DOCKER_GID:-0}"
+    ports:
+      - "127.0.0.1:${AIRFLOW_PORT:-8082}:8080"
+    volumes:
+      - airflow-home:/opt/airflow
+      # Current containerized pipeline DAGs and their shared helpers.
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - ./data/mecaniques-du-journalisme.csv:/opt/radiofrance/input/baseline.csv:ro
+      - ./data/download-pilot:/opt/radiofrance/output:ro
+      - ./data/chunk-pilot:/opt/radiofrance/chunks:ro
+      - ./data/embedding-pilot:/opt/radiofrance/embeddings:ro
+      - ./embedding_job.py:/opt/radiofrance/lib/embedding_job.py:ro
+      - ./chunk_job.py:/opt/radiofrance/lib/chunk_job.py:ro
+      - ./database_job.py:/opt/radiofrance/lib/database_job.py:ro
+      - ./transcript_json.py:/opt/radiofrance/lib/transcript_json.py:ro
+      - ./radiofrance_types.py:/opt/radiofrance/lib/radiofrance_types.py:ro
+      - ./database/sql:/opt/radiofrance/lib/database/sql:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import json, sys, urllib.request;
+          response = urllib.request.urlopen('http://localhost:8080/api/v2/monitor/health', timeout=5);
+          health = json.load(response);
+          sys.exit(not all(health.get(component, {}).get('status') == 'healthy'
+          for component in ('metadatabase', 'scheduler', 'dag_processor', 'triggerer')))
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    stop_grace_period: 60s
+    restart: unless-stopped
+
+volumes:
+  radiofrance-db-volume:
+    name: radiofrance-db-volume
+  airflow-home:
+    name: radiofrance-airflow-volume
+
+networks:
+  default:
+    name: ${RF_DOCKER_NETWORK:-radiofrance_default}

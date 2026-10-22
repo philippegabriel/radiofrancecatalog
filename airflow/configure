@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Capture host mount paths and permissions, not API secret values.
+set -euo pipefail
+project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$project_root"
+[[ "$EUID" != 0 ]] || { echo 'Run this script without sudo, as the project owner.' >&2; exit 1; }
+[[ ! -e .env ]] || { echo '.env already exists; preserve it and use the settings documented in airflow/DEPLOYMENT.md.' >&2; exit 1; }
+[[ -S /var/run/docker.sock ]] || { echo 'Host Docker socket is missing.' >&2; exit 1; }
+[[ -f .OpenAPIKey ]] || { echo 'Expected .OpenAPIKey in the project root.' >&2; exit 1; }
+[[ -f data/mecaniques-du-journalisme.csv ]] || { echo 'Pilot baseline CSV is missing.' >&2; exit 1; }
+[[ "$project_root" != *"'"* && "$project_root" != *$'\n'* ]] || { echo 'Unsupported quoting in project path.' >&2; exit 1; }
+mkdir -p data/download-pilot data/chunk-pilot data/embedding-pilot
+hf_cache_root="${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub}"
+[[ "$hf_cache_root" = /* && "$hf_cache_root" != *"'"* && "$hf_cache_root" != *$'\n'* ]] || { echo 'Hugging Face cache must be an absolute, safely quoted path.' >&2; exit 1; }
+umask 077
+set -o noclobber
+{
+  printf "RF_PROJECT_ROOT='%s'\n" "$project_root"
+  printf "RF_HF_HUB_CACHE='%s'\n" "$hf_cache_root"
+  printf 'RF_UID=%s\n' "$(id -u)"
+  printf 'RF_GID=%s\n' "$(id -g)"
+  printf 'RF_DOCKER_GID=%s\n' "$(stat -c '%g' /var/run/docker.sock)"
+  printf 'AIRFLOW_UI_USERNAME=admin\n'
+  printf 'AIRFLOW_UI_PASSWORD=airflow-ui-dev\n'
+} > .env
+echo 'Created .env with host paths and IDs. No API secret was copied.'

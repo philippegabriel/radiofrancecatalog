@@ -10,9 +10,29 @@
 ## Worflow
 ![code workflow](docs/workflow.svg)
 
-The [compact PostgreSQL schema and JSON/CSV rebuild guide](docs/compact-schema.md)
-describes integer episode identities, reconstructed chunk text and half-precision
-embeddings. This schema targets a fresh database, leaving existing databases intact.
+Start the [Airflow Compose setup](airflow/DEPLOYMENT.md) to run Airflow
+and its persistent metadata database, then trigger the smoke-test DAG.
+The [chunking stage](chunking/README.md) processes a selected completed download
+run through a separate, network-disabled container.
+
+See the [deployment architecture](docs/deployment-architecture.md) and the
+[download container pilot](download/README.md) for the next deployment milestone.
+
+The application schema is defined in [20-application-schema.sql](database/init/20-application-schema.sql).
+See the [database guide](database/README.md) for initialization and loading.
 
 An episode-partitioned [Dagster pilot](docs/dagster.md) orchestrates existing
 transcripts, chunks, embeddings and PostgreSQL imports without relying on file timestamps.
+
+The [EmbeddingGemma 2 stage](embedding/README.md) consumes a completed chunk
+manifest and produces normalized 256D vectors with SentenceTransformers FP32.
+It runs in its own CPU container through Airflow.
+
+The [database setup guide](database/README.md) provisions the separate RadioFrance
+database on first startup of the PostgreSQL container's persistent volume, with pgvector
+and a dedicated application login. The [transactional loader](database/README.md#schema-and-loader--increment-2)
+loads a verified artifact chain. The `radiofrance_database` DAG runs the loader
+and checks the committed results; see [Airflow loading](database/README.md#airflow-loading--increment-3).
+
+Trigger `radiofrance_pipeline` to run download → chunk → embedding → database
+with automatic, explicit artifact handoffs. See [running the complete pipeline](airflow/DEPLOYMENT.md#run-the-complete-pipeline).

@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 from collections.abc import Iterator
-from typing import cast
+from typing import TextIO, cast
 from radiofrance_types import Transcript
 
 import requests
@@ -56,7 +56,16 @@ def load_ids(filename: Path) -> Iterator[str]:
                 yield graphql_id
 
 
+def write_transcript_json(transcript: Transcript, output: TextIO) -> None:
+    """Serialize raw transcript JSON without changing its fields or Unicode text.
+
+    The caller owns the stream and controls file publication and any final newline.
+    """
+    json.dump(transcript, output, ensure_ascii=False, indent=2)
+
+
 def main() -> None:
+    """Download IDs from the input file, retaining CLI skip/delay/error behavior."""
     parser = argparse.ArgumentParser(
         description="Download Radio France podcast transcripts."
     )
@@ -104,12 +113,7 @@ def main() -> None:
 
         if transcript is not None:
             with output.open("w", encoding="utf-8") as f:
-                json.dump(
-                    transcript,
-                    f,
-                    ensure_ascii=False,
-                    indent=2,
-                )
+                write_transcript_json(transcript, f)
 
             print(f"{uuid}: saved to {output}")
 

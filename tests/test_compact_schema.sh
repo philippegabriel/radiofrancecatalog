@@ -95,7 +95,7 @@ if "${psql_cmd[@]}" -v episode_id="$episode" -f insertembeddings.sql < "$work/ba
     echo 'Missing chunk embedding import unexpectedly succeeded' >&2; exit 1
 fi
 # Existing Airflow CSV behaviour works against the compact database as scratch space.
-RF_CATALOGUE_DSN="dbname=$PGDATABASE" venv/airflow/bin/python -m unittest discover -s airflow -p test_catalogue.py
+RF_CATALOGUE_DSN="dbname=$PGDATABASE" venv/airflow/bin/python -m unittest discover -s airflow/test -p test_catalogue.py
 sed 's/_5$/_1/' "$work/catalogue.csv" > "$work/second-suffix.csv"
 "${psql_cmd[@]}" -f importcatalogue.sql < "$work/second-suffix.csv"
 [[ $("${psql_cmd[@]}" -Atc 'SELECT count(*) FROM episode_identity') == 2 ]]

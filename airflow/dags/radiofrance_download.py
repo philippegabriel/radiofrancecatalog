@@ -1,273 +1,128 @@
-"""Publish cumulative show catalogues and transcripts for newly fetched episodes."""
+"""Run the existing download image from Airflow, then verify its artifacts."""
+
+from datetime import timedelta
 import hashlib
 import json
 import os
-import subprocess
-import shutil
-import sys
 from pathlib import Path
-from collections.abc import Mapping
-from datetime import datetime, timezone
-from typing import Protocol, TypedDict
+from typing import TypedDict, cast
 
-from airflow.sdk import Asset, AssetAlias, DAG, Param, task
-from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
-from airflow.sdk.definitions.param import ParamsDict
-from radiofrance_catalogue.catalogue import SHOWS, merge, read_rows
-from radiofrance_catalogue.episodes import EPISODES, EpisodeEvent, InletEvents, record_episode_rows
-from radiofrance_catalogue.storage import PROJECT, aws, uri, s3_uri
+from airflow.sdk import DAG, task
+from airflow.providers.docker.operators.docker import DockerOperator
+from docker.types import Mount
 
 
-class CatalogueState(TypedDict):
-    show: str
-    workspace: str
-
-
-class FetchState(CatalogueState):
-    since: str
-
-
-class PublishedState(FetchState):
-    output: str
-    episode_count: int
-
-
-class CatalogueEvent(TypedDict):
-    show: str
-    episode_count: int
-    sha256: str
-    cutoff_used: str
-
-
-class TranscriptEvent(TypedDict):
-    show: str
-    episode_id: str
+class Artifact(TypedDict):
+    path: str
     sha256: str
 
 
-class AssetEventEmitter(Protocol):
-    def add(self, asset: Asset, *, extra: CatalogueEvent | TranscriptEvent | EpisodeEvent) -> None: ...
+class Manifest(TypedDict):
+    show: str
+    baseline_sha256: str
+    updates: Artifact
+    catalogue: Artifact
+    transcripts: list[Artifact]
 
 
-class OutletEvents(Protocol):
-    def __getitem__(self, asset: AssetAlias) -> AssetEventEmitter: ...
+SHOW = 'mecaniques-du-journalisme'
+OUTPUT = Path('/opt/radiofrance/output')
+HOST = os.environ.get('RF_PROJECT_ROOT') or '/not-configured'
 
-sys.path.insert(0, str(PROJECT))
-from fetchtranscript import aod_uuid, fetch_transcript
-CATALOGUES = AssetAlias('radiofrance-show-catalogues')
-TRANSCRIPTS = AssetAlias('radiofrance-transcripts')
+
+def verify_artifacts(directory: Path) -> None:
+    """Check the completion manifest's show and artifact hashes; reject escaping paths."""
+    manifest = cast(Manifest, json.loads((directory / 'manifest.json').read_text()))
+    if manifest['show'] != SHOW:
+        raise ValueError('Unexpected show in download manifest')
+    baseline: Artifact = {'path': 'baseline.csv', 'sha256': manifest['baseline_sha256']}
+    for artifact in [baseline, manifest['updates'], manifest['catalogue'], *manifest['transcripts']]:
+        path = (directory / artifact['path']).resolve()
+        if not path.is_relative_to(directory.resolve()):
+            raise ValueError('Artifact path escapes its run directory')
+        with path.open('rb') as stream:
+            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+        if digest != artifact['sha256']:
+            raise ValueError(f'Checksum mismatch for {path.name}')
 
 
 with DAG(
     dag_id='radiofrance_download',
-    description='Update the cumulative show catalogue and download new episode transcripts',
-    doc_md="""Retrieve the existing show CSV and register its episode references. Read the
-maximum episode publication timestamp from Airflow asset events as the cutoff,
-then fetch newer episodes,
-merge the new rows into the cumulative CSV, and publish it to S3. Then download
-and publish transcripts for the episodes in this run's updates.csv, emitting
-one asset event per transcript. Register new episode references after catalogue
-publication, so they remain discoverable even if transcript downloading fails.
+    description='Run the pilot download container and verify its completed output.',
+    doc_md="""
+## Purpose and execution flow
+Manually download new `mecaniques-du-journalisme` episodes and their transcripts.
+`prepare_download` checks configuration and chooses a run-specific folder.
+`download` launches the existing image using the host Docker daemon, then
+`verify_download` checks the completed manifest and artifact checksums.
 
-Run through GitHub Actions or trigger manually with `show`.
-Configure RF_S3_BUCKET, AWS credentials, RADIOFRANCE_API_KEY. Cutoff reads use the supported inlet_events API;
-no catalogue scratch database is required by this DAG.
-RF_TRANSCRIPT_DIR optionally selects the local JSON directory (default transcripts/).
-There are no transcript limits, cache scans, or automatic recovery of earlier
-missed downloads. A future manually invoked DAG will handle recovery.
-Set transform=true to pass uploaded transcript URIs to radiofrance_transform.
-This requires a running scheduler and an embedding server configured for Transform.
-The default remains false until that server is provisioned. Empty lists skip the handoff.
-See airflow/README.md for CLI examples and required permissions.
+## Configuration
+Run `bash airflow/configure` on the host, build `radiofrance-download:pilot`,
+and rebuild/restart Compose as described in airflow/DEPLOYMENT.md. Host paths
+and UID/GID come from .env; .OpenAPIKey is mounted read-only into the child
+container. The Airflow container needs the host Docker socket's group permission.
+No API secret is stored in Airflow variables, logs or XCom.
+
+## Running and outputs
+Enable this DAG in the UI and trigger it manually. It uses the existing
+baseline CSV and publishes under data/download-pilot/airflow-<run-hash>/.
+The baseline is never overwritten, and there are no database imports, S3 calls
+or asset events. Check the task log and manifest. Trigger a new DAG run after a
+failure; automatic retries are disabled. Clearing a completed download task
+will fail rather than overwrite its existing output.
 """,
     schedule=None,
     catchup=False,
     max_active_runs=1,
-    params=ParamsDict({
-        'show': Param('affaires-sensibles', type='string', enum=list(SHOWS)),
-        'transform': Param(False, type='boolean', description='Trigger Transform; requires a scheduler and configured embedding server'),
-    }),
+    default_args={'retries': 0},
     tags=['radiofrance', 'download'],
-):
+) as dag:
     @task
-    def retrieve_catalogue(params: Mapping[str, str], run_id: str) -> CatalogueState:
-        """Copy the show's existing CSV into a workspace specific to this run.
+    def prepare_download(run_id: str) -> str:
+        """Validate mounts and return an output-folder name derived from run_id.
 
-        Use RF_CATALOGUE_BASELINE_DIR when supplied; otherwise download from S3.
-        A missing baseline fails the task. Return the show and workspace path
-        for subsequent tasks.
+        Read only configuration and baseline metadata; create no files or network
+        connections. The returned name is a small XCom reference, never secret data.
         """
-        show = params['show']
-        if not isinstance(show, str) or show not in SHOWS:
-            raise ValueError('Unsupported show')
-        workspace = Path(os.environ['AIRFLOW_HOME']) / 'downloads' / hashlib.sha256(run_id.encode()).hexdigest() / show
-        workspace.mkdir(parents=True, exist_ok=True)
-        baseline = workspace / 'baseline.csv'
-        temporary = workspace / 'baseline.csv.tmp'
-        local_baselines = os.environ.get('RF_CATALOGUE_BASELINE_DIR')
-        if local_baselines:
-            shutil.copyfile(Path(local_baselines) / f'{show}.csv', temporary)
-        else:
-            aws('s3', 'cp', uri(show), str(temporary))
-        # Missing baselines fail instead of silently starting a full catalogue fetch.
-        temporary.replace(baseline)
-        return {'show': show, 'workspace': str(workspace)}
-
-    @task(inlets=list(EPISODES.values()), outlets=list(EPISODES.values()))
-    def record_episodes(
-        state: CatalogueState,
-        filename: str,
-        inlet_events: InletEvents,
-        outlet_events: OutletEvents,
-    ) -> CatalogueState:
-        """Register catalogue episodes as reference assets with publication dates.
-
-        Read the selected run CSV and emit an event only for episodes whose ID
-        and publication timestamp are not already recorded for this show.
-        Baseline registration seeds existing episodes; updates registration
-        records new episodes after S3 catalogue publication. A reference event
-        records catalogue membership, not transcript availability.
-        """
-        alias = EPISODES[state['show']]
-        rows = read_rows(Path(state['workspace']) / filename, state['show'])
-        record_episode_rows(state['show'], rows, inlet_events[alias], outlet_events[alias])
-        return state
-
-    @task(inlets=list(EPISODES.values()))
-    def derive_cutoff(state: CatalogueState, inlet_events: InletEvents) -> FetchState:
-        """Read the show's maximum publication timestamp from episode events.
-
-        Use Airflow's supported inlet_events accessor. Publication timestamps,
-        rather than event creation times, determine the cutoff. A show with no
-        episode events starts at 1900-01-01 UTC. Return the cutoff for rf_dump.py.
-        """
-        timestamp = max(
-            (int(event.extra['published_ts']) for event in inlet_events[EPISODES[state['show']]]),
-            default=None,
-        )
-        since = datetime.fromtimestamp(timestamp, timezone.utc).isoformat() if timestamp is not None else '1900-01-01T00:00:00+00:00'
-        return {**state, 'since': since}
+        if not os.environ.get('RF_PROJECT_ROOT') or not Path(HOST).is_absolute():
+            raise ValueError('Run bash airflow/configure and recreate the Airflow container')
+        if not Path('/opt/radiofrance/input/baseline.csv').is_file() or not OUTPUT.is_dir():
+            raise ValueError('Pilot baseline or output mount is missing')
+        return 'airflow-' + hashlib.sha256(run_id.encode()).hexdigest()
 
     @task
-    def fetch_updates(state: FetchState) -> FetchState:
-        """Fetch episodes published strictly after the baseline cutoff.
+    def verify_download(folder: str) -> None:
+        """Read and verify completed files in the shared output mount; log their path.
 
-        Invoke rf_dump.py with the selected Python executable and an API key
-        supplied through its environment. Publish updates.csv in the workspace
-        only after the command succeeds, then pass the task state onward.
+        Input is the folder name from prepare_download. No files are modified;
+        missing or corrupt artifacts fail the task. No value is returned.
         """
-        key = os.environ.get('RADIOFRANCE_API_KEY')
-        if not key:
-            key_file = Path(os.environ.get('RF_API_KEY_FILE', str(PROJECT / '.OpenAPIKey')))
-            key = key_file.read_text().strip()
-        if not key:
-            raise ValueError('Radio France API key is empty')
-        env = {**os.environ, 'RADIOFRANCE_API_KEY': key}
-        temporary = Path(state['workspace']) / 'updates.csv.tmp'
-        subprocess.run([
-            os.environ.get('RF_DOWNLOAD_PYTHON', str(PROJECT / 'venv/airflow/bin/python')),
-            str(PROJECT / 'rf_dump.py'), '--show-url',
-            f"https://www.radiofrance.fr/{SHOWS[state['show']]}/podcasts/{state['show']}",
-            '--since', state['since'], '--out', str(temporary),
-        ], check=True, env=env, cwd=PROJECT)
-        temporary.replace(Path(state['workspace']) / 'updates.csv')
-        return state
+        directory = OUTPUT / folder
+        verify_artifacts(directory)
+        print(f'Verified download: data/download-pilot/{folder}/manifest.json')
 
-    @task
-    def merge_catalogue(state: FetchState) -> PublishedState:
-        """Merge baseline and downloaded episodes into a cumulative show CSV.
-
-        Deduplicate by episode ID, prefer downloaded rows, and sort by
-        publication timestamp and ID. Return the output path and total episode
-        count alongside the existing task state.
-        """
-        workspace = Path(state['workspace'])
-        output = workspace / f"{state['show']}.csv"
-        count = merge(workspace / 'baseline.csv', workspace / 'updates.csv', output, state['show'])
-        return {**state, 'output': str(output), 'episode_count': count}
-
-    @task(outlets=[CATALOGUES])
-    def publish_catalogue(state: PublishedState, outlet_events: OutletEvents) -> None:
-        """Upload the cumulative CSV to S3 and record its Airflow asset event.
-
-        When RF_CATALOGUE_OUTPUT_DIR is set, also publish a local copy for
-        subsequent steps such as building GitHub Pages. Record the show, episode
-        count, content hash, and cutoff used after successful publication.
-        """
-        output = Path(state['output'])
-        destination = uri(state['show'])
-        aws('s3', 'cp', str(output), destination)
-        local_outputs = os.environ.get('RF_CATALOGUE_OUTPUT_DIR')
-        if local_outputs:
-            target = Path(local_outputs)
-            target.mkdir(parents=True, exist_ok=True)
-            temporary = target / (output.name + '.tmp')
-            shutil.copyfile(output, temporary)
-            temporary.replace(target / output.name)
-        outlet_events[CATALOGUES].add(
-            Asset(uri=destination, name=f"{state['show']}_catalogue"),
-            extra={'show': state['show'], 'episode_count': state['episode_count'],
-                   'sha256': hashlib.sha256(output.read_bytes()).hexdigest(), 'cutoff_used': state['since']},
-        )
-
-    @task(outlets=[TRANSCRIPTS])
-    def download_transcripts(state: PublishedState, outlet_events: OutletEvents) -> list[str]:
-        """Download and publish transcripts for this run's newly fetched episodes.
-
-        Read IDs from updates.csv, fetch each transcript using the existing API
-        helper, and write JSONs to RF_TRANSCRIPT_DIR (default transcripts/).
-        Upload each JSON to data/transcripts/<episode-id>.json and emit an asset
-        event with its show, episode ID and content hash. Errors fail the task;
-        previous missing downloads are left to a future manual recovery DAG.
-        Return only successfully uploaded S3 transcript URIs for Transform.
-        """
-        directory = Path(os.environ.get('RF_TRANSCRIPT_DIR', str(PROJECT / 'transcripts')))
-        directory.mkdir(parents=True, exist_ok=True)
-        rows = read_rows(Path(state['workspace']) / 'updates.csv', state['show'])
-        uploaded: list[str] = []
-        for row in rows:
-            episode_id = row['id']
-            transcript = fetch_transcript(aod_uuid(episode_id))
-            if transcript is None:
-                raise RuntimeError(f'Transcript unavailable for {episode_id}')
-            path = directory / f'{episode_id}.json'
-            temporary = path.with_suffix('.json.tmp')
-            temporary.write_text(json.dumps(transcript, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-            temporary.replace(path)
-            destination = s3_uri(f'data/transcripts/{episode_id}.json')
-            aws('s3', 'cp', str(path), destination)
-            outlet_events[TRANSCRIPTS].add(
-                Asset(uri=destination, name=f'{episode_id}_transcript'),
-                extra={'show': state['show'], 'episode_id': episode_id,
-                       'sha256': hashlib.sha256(path.read_bytes()).hexdigest()},
-            )
-            uploaded.append(destination)
-        return uploaded
-
-    # Airflow injects context arguments and resolves XComArg values at runtime;
-    # its decorator annotations retain the underlying Python function signature.
-    baseline = record_episodes(retrieve_catalogue(), 'baseline.csv')  # pyright: ignore[reportCallIssue, reportArgumentType]
-    catalogue = merge_catalogue(fetch_updates(derive_cutoff(baseline)))  # pyright: ignore[reportCallIssue, reportArgumentType]
-    published = publish_catalogue(catalogue)  # pyright: ignore[reportCallIssue, reportArgumentType]
-    references = record_episodes.override(task_id='record_new_episodes')(catalogue, 'updates.csv')  # pyright: ignore[reportCallIssue, reportArgumentType]
-    _ = published >> references
-    transcripts = download_transcripts(catalogue)  # pyright: ignore[reportCallIssue, reportArgumentType]
-    _ = references >> transcripts
-
-    @task.short_circuit
-    def should_transform(sources: list[str], params: Mapping[str, object]) -> bool:
-        """Allow the handoff only when requested and successful uploads exist.
-
-        Read the transform flag; return false to skip triggering an empty run.
-        This does not inspect S3 or discover past missing outputs.
-        """
-        return params['transform'] is True and bool(sources)
-
-    handoff = should_transform(transcripts)  # pyright: ignore[reportCallIssue, reportArgumentType]
-    trigger = TriggerDagRunOperator(
-        task_id='trigger_transform', trigger_dag_id='radiofrance_transform',
-        trigger_run_id='download__{{ run_id }}',
-        conf={'transcripts': transcripts}, wait_for_completion=False,
-        skip_when_already_exists=True,
+    folder = prepare_download()  # pyright: ignore[reportCallIssue]
+    download = DockerOperator(
+        task_id='download',
+        image='radiofrance-download:pilot',
+        docker_url='unix://var/run/docker.sock',
+        api_version='auto',
+        command=['--show', SHOW, '--baseline', '/input/baseline.csv',
+                 '--output-dir', "/output/{{ ti.xcom_pull(task_ids='prepare_download') }}",
+                 '--api-key-file', '/run/secrets/radiofrance-api-key'],
+        mounts=[
+            Mount('/input/baseline.csv', f'{HOST}/data/{SHOW}.csv', type='bind', read_only=True),
+            Mount('/output', f'{HOST}/data/download-pilot', type='bind'),
+            Mount('/run/secrets/radiofrance-api-key', f'{HOST}/.OpenAPIKey', type='bind', read_only=True),
+        ],
+        user=f"{os.environ.get('RF_UID', '1000')}:{os.environ.get('RF_GID', '1000')}",
+        mount_tmp_dir=False,
+        network_mode='bridge',
+        mem_limit='1g',
+        auto_remove='force',
+        execution_timeout=timedelta(hours=1),
+        do_xcom_push=False,
+        doc_md='Launch the download image with read-only baseline/key mounts and a writable output directory. API calls and output writes happen in this child container; nonzero exit fails the task.',
     )
-    _ = handoff >> trigger
+    checked = verify_download(folder)  # pyright: ignore[reportArgumentType]
+    _ = folder >> download >> checked

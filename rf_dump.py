@@ -7,8 +7,8 @@ import sys
 import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
-from collections.abc import Iterator
-from typing import cast
+from collections.abc import Iterable, Iterator
+from typing import TextIO, cast
 from radiofrance_types import EpisodeRow, GraphQLData, GraphQLVariables, Timestamp
 
 import requests
@@ -211,7 +211,25 @@ def fetch_all(
             time.sleep(sleep_sec)
 
 
+def write_catalogue_csv(rows: Iterable[EpisodeRow], output: TextIO) -> int:
+    """Sort API rows by publication timestamp/ID, write catalogue CSV, and return its count.
+
+    The caller owns the output stream so both the standalone CLI and staged
+    pipeline job use the same column layout and serialization.
+    """
+    ordered = sorted(rows, key=lambda row: (int(row['published_ts'] or 0), row['id']))
+    fieldnames = [
+        'show', 'published_iso', 'published_ts', 'title', 'description',
+        'web_url', 'podcast_title', 'podcast_url', 'player_url', 'id',
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(ordered)
+    return len(ordered)
+
+
 def main() -> int:
+    """Fetch a show's catalogue and write the requested CSV using CLI configuration."""
     parser = argparse.ArgumentParser(
         description="Dump Radio France show diffusions to CSV."
     )
@@ -279,30 +297,8 @@ def main() -> int:
         )
     )
 
-    rows.sort(
-        key=lambda row: (
-            int(row["published_ts"] or 0),
-            row["id"],
-        )
-    )
-
-    fieldnames = [
-        "show",
-        "published_iso",
-        "published_ts",
-        "title",
-        "description",
-        "web_url",
-        "podcast_title",
-        "podcast_url",
-        "player_url",
-        "id",
-    ]
-
     with open(args.out, "w", newline="", encoding="utf-8") as file_obj:
-        writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
+        write_catalogue_csv(rows, file_obj)
 
     print(f"Wrote {len(rows)} records to {args.out}")
     return 0

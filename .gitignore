@@ -15,6 +15,19 @@
 /aws/*.json
 
 __pycache__/
+/.env
 
 # Local llama.cpp source, build products and converted model
 /data/llama.cpp/
+
+# Local embedding snapshots, validation runtime and generated vectors
+/data/embedding-models/
+/data/embedding-runtime/
+/data/embedding-pilot/
+
+# Generated pipeline artifacts, benchmark environments and database backups
+/data/download-pilot/
+/data/chunk-pilot/
+/data/transcripts/
+/data/benchmarks/
+/data/database-backups/

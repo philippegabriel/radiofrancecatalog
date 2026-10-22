@@ -3,6 +3,7 @@
 import csv
 import sys
 from pathlib import Path
+from typing import TextIO
 from radiofrance_types import Chunk, TranscriptSegment
 from transcript_json import read_segments
 
@@ -53,20 +54,17 @@ def make_chunks(segments: list[TranscriptSegment]) -> list[Chunk]:
     return chunks
 
 
-def main() -> None:
-    if len(sys.argv) != 2:
-        print(
-            f"Usage: {Path(sys.argv[0]).name} TRANSCRIPT.json",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+def transcript_to_csv(path: Path, output: TextIO) -> int:
+    """Read one transcript, write its seven-column chunk CSV, and return the chunk count.
 
-    path = Path(sys.argv[1])
+    Keep original segment numbering and timestamps. The caller owns the output
+    stream, allowing the CLI to use stdout and pipeline jobs to stage a file.
+    """
     episode_id = path.stem
 
     chunks = make_chunks(read_segments(path))
 
-    writer = csv.writer(sys.stdout)
+    writer = csv.writer(output)
 
     for chunk_no, chunk in enumerate(chunks):
         start_seq = chunk[0][0]
@@ -86,6 +84,18 @@ def main() -> None:
             end_time,
             text,
         ])
+    return len(chunks)
+
+
+def main() -> None:
+    """Convert the supplied transcript to chunk CSV on standard output."""
+    if len(sys.argv) != 2:
+        print(
+            f"Usage: {Path(sys.argv[0]).name} TRANSCRIPT.json",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    transcript_to_csv(Path(sys.argv[1]), sys.stdout)
 
 
 if __name__ == "__main__":

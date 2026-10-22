@@ -1,0 +1,3 @@
+requests==2.34.2
+# Imported by the existing catalogue module; the download job opens no DB connections.
+psycopg2-binary==2.9.13

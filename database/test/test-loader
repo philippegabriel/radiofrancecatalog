@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Provision an isolated database, then run the transactional loader integration tests.
+set -euo pipefail
+setup_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+RF_VALIDATE_LOADER=1 bash "$setup_dir/test-setup"
