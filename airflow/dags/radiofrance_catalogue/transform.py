@@ -31,7 +31,6 @@ class EmbeddingResponse(TypedDict):
 class ArtifactEvent(TypedDict):
     episode_id: str
     source_uri: str
-    sha256: str
 
 
 class EmbeddingEvent(ArtifactEvent):

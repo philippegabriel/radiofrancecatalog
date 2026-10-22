@@ -2,25 +2,24 @@
 
 from collections.abc import Mapping
 from datetime import timedelta
-import hashlib
 import os
 from pathlib import Path
 import re
 from typing import TypedDict
+
+from radiofrance.libs.runs import run_folder
 
 from airflow.sdk import DAG, Param, task
 from airflow.sdk.definitions.param import ParamsDict
 from airflow.providers.docker.operators.docker import DockerOperator
 from docker.types import Mount
 
-from radiofrance.jobs.chunk import sha256
 from radiofrance.jobs.embedding import validate_input, verify_output
 
 
 class EmbeddingRun(TypedDict):
     chunk_run: str
     output_folder: str
-    source_sha256: str
 
 
 CHUNKS = Path('/opt/radiofrance/chunks')
@@ -37,7 +36,7 @@ with DAG(
 `prepare_embedding` verifies the selected chunk manifest and cache mount configuration.
 `embed` runs the SentenceTransformers CPU container, loading Google's text-only
 EmbeddingGemma 2 once in FP32 and publishing normalized 256-dimensional vectors.
-`verify_embeddings` checks output hashes, row identities, vector norms, totals,
+`verify_embeddings` checks row identities, vector norms, totals,
 and source/model provenance. There are no database writes or cloud dependencies.
 
 ## Configuration and running
@@ -46,22 +45,22 @@ Google snapshot with hf download in the standard Hugging Face cache, create
  data/embedding-pilot, and recreate Compose. The host Docker socket and UID/GID
 settings are shared with the download/chunk stages. Trigger this DAG manually
 for RF_SHOW (default mecaniques-du-journalisme), using the same deployment setting.
-with `chunk_run`, the basename of a completed data/chunk-pilot/airflow-<hash> run.
+with `chunk_run`, the basename of a completed data/chunk-pilot/airflow-<run-id> run.
 RF_HF_HUB_CACHE in .env gives the absolute host Hub cache path. No API key or Airflow model dependencies are required. The processing container
 has no network, and input/model mounts are read-only. Only the host hf download command needs internet access. The container rejects missing
 or corrupt cached snapshots before loading the model; Airflow does not mount the user cache. Container memory is limited to 4 GiB.
 
 ## Outputs and recovery
 Per-episode JSONL vectors and a completion manifest are published atomically to
- data/embedding-pilot/airflow-<run-hash>/. Existing output is never overwritten.
+ data/embedding-pilot/airflow-<run-id>/. Existing output is never overwritten.
 Empty chunk runs publish empty output without loading the model. Trigger a new
 DAG run after processing failure; automatic retries are disabled. Verification
 alone can be cleared and retried against an existing completed output.
-A model checksum inventory is published with the output, without writing to the HF cache. The manifest records model revision, FP32, prefixes, normalization, dimensions,
-package versions, code checksum, model checksum and chunk-source checksums.
+A model file presence inventory is published with the output, without writing to the HF cache. The manifest records model revision, FP32, prefixes, normalization, dimensions,
+package versions, chunk-source run names and model revision.
 """,
     schedule=None, catchup=False, max_active_runs=1, default_args={'retries': 0},
-    params=ParamsDict({'chunk_run': Param('', type='string', description='Completed chunk folder: airflow-<64-character hash>')}),
+    params=ParamsDict({'chunk_run': Param('', type='string', description='Completed chunk folder: airflow-<run-id>')}),
     tags=['radiofrance', 'embedding'],
 ) as dag:
     @task(multiple_outputs=False)
@@ -75,8 +74,8 @@ package versions, code checksum, model checksum and chunk-source checksums.
         if not os.environ.get('RF_PROJECT_ROOT') or not Path(HOST).is_absolute():
             raise ValueError('Configure the host path before triggering this DAG')
         name = params['chunk_run']
-        if not re.fullmatch(r'airflow-[a-f0-9]{64}', name):
-            raise ValueError('chunk_run must be the airflow-<hash> chunk directory name')
+        if not re.fullmatch(r'airflow-[A-Za-z0-9_-]+', name):
+            raise ValueError('chunk_run must be the airflow-<run-id> chunk directory name')
         if not OUTPUTS.is_dir():
             raise ValueError('Create data/embedding-pilot and recreate Compose')
         source_path = CHUNKS / name / 'manifest.json'
@@ -85,8 +84,7 @@ package versions, code checksum, model checksum and chunk-source checksums.
             raise ValueError('Chunk show does not match configured RF_SHOW')
         if not CACHE_HOST or not Path(CACHE_HOST).is_absolute():
             raise ValueError('Set RF_HF_HUB_CACHE in .env to the absolute host Hugging Face hub cache path')
-        return {'chunk_run': name, 'output_folder': 'airflow-' + hashlib.sha256(run_id.encode()).hexdigest(),
-            'source_sha256': sha256(source_path)}
+        return {'chunk_run': name, 'output_folder': run_folder(run_id)}
 
     @task
     def verify_embeddings(state: EmbeddingRun) -> None:
@@ -97,7 +95,7 @@ package versions, code checksum, model checksum and chunk-source checksums.
         return no value. Log the completed output manifest path on success.
         """
         manifest = verify_output(OUTPUTS / state['output_folder'], CHUNKS / state['chunk_run'] / 'manifest.json')
-        if manifest['source_manifest_sha256'] != state['source_sha256']:
+        if manifest['source_run'] != state['chunk_run']:
             raise ValueError('Embedding output does not match the selected chunk/model provenance')
         print(f"Verified {manifest['chunk_count']} embeddings: data/embedding-pilot/{state['output_folder']}/manifest.json")
 

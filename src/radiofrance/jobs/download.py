@@ -1,12 +1,10 @@
 """Acquire a show's catalogue delta and transcripts using local-file boundaries."""
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
 import re
-import sys
 import tempfile
 import time
 from typing import TypedDict
@@ -19,7 +17,6 @@ from radiofrance.fetch_episodes import fetch_all, write_catalogue_csv
 
 class Artifact(TypedDict):
     path: str
-    sha256: str
 
 
 class TranscriptArtifact(Artifact):
@@ -30,7 +27,6 @@ class DownloadManifest(TypedDict):
     version: int
     show: str
     cutoff_timestamp: int
-    baseline_sha256: str
     new_episode_count: int
     catalogue_episode_count: int
     updates: Artifact
@@ -39,9 +35,8 @@ class DownloadManifest(TypedDict):
 
 
 def artifact(path: Path, root: Path) -> Artifact:
-    """Identify a published file by relative path and SHA256 for later staging."""
-    return {'path': str(path.relative_to(root)),
-            'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+    """Identify a published file by relative path for later staging."""
+    return {'path': str(path.relative_to(root))}
 
 
 def run_download(show: str, baseline: Path, output: Path, api_key: str,
@@ -55,7 +50,7 @@ def run_download(show: str, baseline: Path, output: Path, api_key: str,
     0644); staging remains private during acquisition. An
     unavailable transcript fails this pilot, matching the existing Download DAG.
     Optional fixed-selection mode requires an empty baseline, retrieves metadata
-    through the same API, and rejects missing IDs or changed transcript bytes/counts.
+    through the same API, and rejects missing IDs or changed transcript counts.
     No S3 publication, Airflow events or database writes occur here.
     """
     if show not in SHOWS:
@@ -121,13 +116,11 @@ def run_download(show: str, baseline: Path, output: Path, api_key: str,
                 stream.write('\n')
             if selection:
                 target = expected[episode_id]
-                if (artifact(path, directory)['sha256'] != target['transcript_sha256']
-                        or len(transcript['transcript']) != target['segment_count']):
+                if len(transcript['transcript']) != target['segment_count']:
                     raise ValueError(f'Selected transcript changed: {episode_id}')
             transcripts.append({**artifact(path, directory), 'episode_id': episode_id})
         manifest: DownloadManifest = {
             'version': 1, 'show': show, 'cutoff_timestamp': cutoff,
-            'baseline_sha256': hashlib.sha256(baseline_bytes).hexdigest(),
             'new_episode_count': len(new_rows), 'catalogue_episode_count': count,
             'updates': artifact(updates, directory), 'catalogue': artifact(catalogue, directory),
             'transcripts': transcripts,
@@ -151,7 +144,7 @@ def main() -> None:
     parser.add_argument('--output-dir', type=Path, required=True)
     parser.add_argument('--transcript-delay', type=float, default=1.0)
     parser.add_argument('--api-key-file', type=Path, help='Read a runtime-mounted key file instead of the environment')
-    parser.add_argument('--episode-selection', type=Path, help='Fixed episode IDs and transcript fingerprints; requires empty baseline')
+    parser.add_argument('--episode-selection', type=Path, help='Fixed episode IDs and transcript segment counts; requires empty baseline')
     args = parser.parse_args()
     api_key = args.api_key_file.read_text(encoding='utf-8') if args.api_key_file else os.environ.get('RADIOFRANCE_API_KEY', '')
     manifest = run_download(args.show, args.baseline, args.output_dir,

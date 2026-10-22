@@ -1,6 +1,5 @@
 """Save and restore versioned CI metadata snapshots without schema migrations."""
 import argparse
-import hashlib
 import json
 import os
 import subprocess
@@ -16,7 +15,6 @@ class Snapshot(TypedDict):
     airflow_version: str
     postgres_major: str
     key: str
-    sha256: str
     bytes: int
 
 
@@ -86,10 +84,8 @@ def main() -> None:
             snapshot = cast(Snapshot, json.loads(manifest.read_text()))
             validate(snapshot, prefix, airflow_version, major)
             aws('s3', 'cp', f"s3://{bucket}/{snapshot['key']}", str(dump), '--only-show-errors')
-            with dump.open('rb') as stream:
-                digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-            if dump.stat().st_size != snapshot['bytes'] or digest != snapshot['sha256']:
-                raise ValueError('Snapshot checksum or size mismatch')
+            if dump.stat().st_size != snapshot['bytes']:
+                raise ValueError('Snapshot size mismatch')
             report('S3 snapshot download and verification', started)
             started = time.monotonic()
             with dump.open('rb') as stream:
@@ -101,10 +97,8 @@ def main() -> None:
         else:
             identifier = f"{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
             key = f'{prefix}/snapshots/{identifier}.dump'
-            with dump.open('rb') as stream:
-                digest = hashlib.file_digest(stream, 'sha256').hexdigest()
             snapshot = Snapshot(format_version=1, airflow_version=airflow_version,
-                                postgres_major=major, key=key, sha256=digest, bytes=dump.stat().st_size)
+                                postgres_major=major, key=key, bytes=dump.stat().st_size)
             manifest.write_text(json.dumps(snapshot))
             started = time.monotonic()
             aws('s3', 'cp', str(dump), f's3://{bucket}/{key}', '--only-show-errors')

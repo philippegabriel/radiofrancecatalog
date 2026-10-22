@@ -22,7 +22,7 @@ class ChunkJobTests(unittest.TestCase):
             {'text': 'Fin', 'start': 10, 'end': 11},
         ]}), encoding='utf-8')
         transcripts: list[job.TranscriptArtifact] = [] if empty else [
-            {'episode_id': 'episode_5', 'path': path.name, 'sha256': job.sha256(path)}]
+            {'episode_id': 'episode_5', 'path': path.name}]
         manifest: job.DownloadManifest = {'version': 1, 'show': 'mecaniques-du-journalisme',
                                           'new_episode_count': len(transcripts), 'transcripts': transcripts}
         output = root / 'manifest.json'
@@ -44,10 +44,8 @@ class ChunkJobTests(unittest.TestCase):
                 os.umask(previous)
             self.assertEqual(manifest, job.verify_output(root / 'chunks'))
             self.assertEqual(manifest['episode_count'], 1)
-            self.assertEqual(manifest['source_manifest_sha256'], job.sha256(source))
             self.assertEqual(manifest['strategy']['target_size'], 1000)
             self.assertEqual(manifest['strategy']['min_size'], 300)
-            self.assertEqual(len(manifest['strategy']['code_sha256']), 64)
             expected = subprocess.check_output([sys.executable, '-m', 'radiofrance.chunk_json_to_csv', str(source.parent / 'episode_5.json')])
             output = root / 'chunks/episode_5.csv'
             self.assertEqual(output.read_bytes(), expected)
@@ -59,7 +57,7 @@ class ChunkJobTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 job.run_chunking(source, root / 'chunks')
             output.write_text('corrupt')
-            with self.assertRaisesRegex(ValueError, 'checksum'):
+            with self.assertRaisesRegex(ValueError, 'Invalid chunk rows'):
                 job.verify_output(root / 'chunks')
 
     def test_empty_input_and_failure_do_not_publish_partial_results(self) -> None:
@@ -76,7 +74,6 @@ class ChunkJobTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 job.run_chunking(source, root / 'failed')
             data = job.validate_source(self.source(root / 'valid'))
-            data['transcripts'][0]['sha256'] = job.sha256(transcript)
             source.write_text(json.dumps(data))
             with self.assertRaises(ValueError):
                 job.run_chunking(source, root / 'failed')
@@ -92,7 +89,6 @@ class ChunkJobTests(unittest.TestCase):
             outside = root / 'episode_5.json'
             outside.write_text('{}')
             data['transcripts'][0]['path'] = '../episode_5.json'
-            data['transcripts'][0]['sha256'] = job.sha256(outside)
             source.write_text(json.dumps(data))
             with self.assertRaisesRegex(ValueError, 'inside'):
                 job.run_chunking(source, root / 'chunks')

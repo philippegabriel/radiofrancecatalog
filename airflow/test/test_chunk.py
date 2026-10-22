@@ -44,7 +44,7 @@ class LocalChunkTests(unittest.TestCase):
                 state = dag_module.prepare_chunking.function({'download_run': name}, 'manual-test')
                 run_chunking(source / 'manifest.json', chunks / state['output_folder'])
                 dag_module.verify_chunks.function(state)
-                bad_state: dag_module.ChunkRun = {**state, 'source_sha256': 'wrong'}
+                bad_state: dag_module.ChunkRun = {**state, 'download_run': 'wrong'}
                 with self.assertRaisesRegex(ValueError, 'does not match'):
                     dag_module.verify_chunks.function(bad_state)
                 with self.assertRaisesRegex(ValueError, 'directory name'):

@@ -2,7 +2,6 @@
 
 import argparse
 import csv
-import hashlib
 import importlib
 from importlib.metadata import version
 import json
@@ -13,7 +12,7 @@ import re
 import tempfile
 from typing import Protocol, TypedDict, cast
 
-from radiofrance.jobs.chunk import ChunkManifest, contained_file, sha256, verify_output as verify_chunks
+from radiofrance.jobs.chunk import ChunkManifest, contained_file, verify_output as verify_chunks
 
 MODEL_ID = 'google/embeddinggemma-2'
 MODEL_REVISION = '914f7f89142e33e77833254d9c9b90c3cef7303b'
@@ -25,14 +24,6 @@ MAX_TOKENS = 8192
 
 class FileArtifact(TypedDict):
     path: str
-    sha256: str
-
-
-class ModelManifest(TypedDict):
-    version: int
-    model_id: str
-    revision: str
-    files: list[FileArtifact]
 
 
 class Configuration(TypedDict):
@@ -47,8 +38,6 @@ class Configuration(TypedDict):
     max_tokens: int
     batch_size: int
     threads: int
-    model_manifest_sha256: str
-    code_sha256: str
     packages: dict[str, str]
 
 
@@ -60,7 +49,6 @@ class EmbeddingRow(TypedDict):
 
 class EmbeddingArtifact(FileArtifact):
     episode_id: str
-    source_sha256: str
     chunk_count: int
 
 
@@ -69,7 +57,6 @@ class EmbeddingManifest(TypedDict):
     stage: str
     show: str
     source_run: str
-    source_manifest_sha256: str
     configuration: Configuration
     episode_count: int
     chunk_count: int
@@ -109,53 +96,12 @@ def cached_snapshot(cache: Path) -> Path:
     return snapshot
 
 
-def verify_model(cache: Path) -> ModelManifest:
-    """Read a standard Hub snapshot and fingerprint files without modifying the cache.
-
-    Snapshot symlinks may use repository blobs backed by the shared Hub store. Reject
-    escaping/broken links and verify content-addressed blob names against bytes.
-    Return provenance to publish with the output, rather than writing in HF's cache.
-    """
+def verify_model(cache: Path) -> None:
+    """Check that the pinned model snapshot contains the required local files."""
     snapshot = cached_snapshot(cache)
-    repository = snapshot.parent.parent.resolve()
-    files: list[FileArtifact] = []
-    for path in sorted(snapshot.rglob('*')):
-        if path.is_symlink() and not path.is_file():
-            raise ValueError('Model snapshot contains a broken cache link; run hf download again')
-        if not path.is_file():
-            continue
-        target = path.resolve()
-        if not (target.is_relative_to(repository) or target.is_relative_to(cache.resolve() / 'blobs')):
-            raise ValueError('Model cache link escapes its repository')
-        checksum = sha256(path)
-        if path.is_symlink():
-            link = path.parent / path.readlink()
-            if link.parent.resolve() != repository / 'blobs':
-                raise ValueError('Model cache link escapes its repository blobs')
-            blob_name = link.name
-            if re.fullmatch(r'[0-9a-f]{64}', blob_name):
-                if checksum != blob_name:
-                    raise ValueError('Corrupt model cache blob')
-            elif re.fullmatch(r'[0-9a-f]{40}', blob_name):
-                digest = hashlib.sha1(usedforsecurity=False)
-                digest.update(f'blob {path.stat().st_size}\0'.encode())
-                with path.open('rb') as stream:
-                    for block in iter(lambda: stream.read(1024 * 1024), b''):
-                        digest.update(block)
-                if digest.hexdigest() != blob_name:
-                    raise ValueError('Corrupt model cache blob')
-            else:
-                raise ValueError('Unexpected model cache blob name')
-        files.append({'path': str(path.relative_to(snapshot)), 'sha256': checksum})
-    if not {'model.safetensors', 'config.json', 'tokenizer.json', 'modules.json', 'chat_template.jinja'} <= {item['path'] for item in files}:
+    required = ('model.safetensors', 'config.json', 'tokenizer.json', 'modules.json', 'chat_template.jinja')
+    if not all((snapshot / name).is_file() for name in required):
         raise ValueError('Model snapshot is incomplete; run hf download again')
-    return {'version': 1, 'model_id': MODEL_ID, 'revision': MODEL_REVISION, 'files': files}
-
-
-def model_digest(manifest: ModelManifest) -> str:
-    """Hash the canonical model inventory serialized alongside embedding outputs."""
-    content = json.dumps(manifest, ensure_ascii=False, indent=2, allow_nan=False) + '\n'
-    return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
 
 def validate_input(path: Path) -> ChunkManifest:
@@ -201,9 +147,11 @@ class SentenceEncoder:
 
 
 def verify_output(directory: Path, source_manifest: Path | None = None) -> EmbeddingManifest:
-    """Verify output identities, checksums, 256D norms, counts and optional source lineage."""
+    """Verify output identities, 256D norms, counts and optional source lineage."""
     manifest = cast(EmbeddingManifest, json.loads((directory / 'manifest.json').read_text()))
-    config = manifest['configuration']
+    raw_config = cast(dict[str, object], manifest['configuration'])
+    config = cast(Configuration, {key: raw_config[key] for key in Configuration.__annotations__})
+    manifest['configuration'] = config
     if manifest['version'] not in (1, 2) or manifest['stage'] != 'embedding':
         raise ValueError('Expected a version-1 or version-2 embedding manifest')
     if (config['model_id'], config['revision'], config['runtime'], config['precision'], config['dimensions'], config['normalized'],
@@ -211,12 +159,6 @@ def verify_output(directory: Path, source_manifest: Path | None = None) -> Embed
         MODEL_ID, MODEL_REVISION, 'sentence-transformers', 'float32', DIMENSIONS, True,
         DOCUMENT_PREFIX, QUERY_PREFIX, MAX_TOKENS):
         raise ValueError('Unexpected embedding configuration')
-    if manifest['version'] == 2:
-        inventory_path = contained_file(directory, 'model-manifest.json')
-        inventory = cast(ModelManifest, json.loads(inventory_path.read_text()))
-        if (sha256(inventory_path) != config['model_manifest_sha256']
-                or inventory['version'] != 1 or inventory['model_id'] != MODEL_ID or inventory['revision'] != MODEL_REVISION):
-            raise ValueError('Model inventory does not match embedding provenance')
     seen: set[str] = set()
     paths: set[str] = set()
     total = 0
@@ -227,8 +169,8 @@ def verify_output(directory: Path, source_manifest: Path | None = None) -> Embed
         seen.add(episode)
         paths.add(item['path'])
         path = contained_file(directory, item['path'])
-        if path.name != f'{episode}.jsonl' or sha256(path) != item['sha256']:
-            raise ValueError('Embedding identity or checksum mismatch')
+        if path.name != f'{episode}.jsonl':
+            raise ValueError('Embedding identity mismatch')
         count = 0
         with path.open(encoding='utf-8') as stream:
             for index, line in enumerate(stream):
@@ -244,9 +186,9 @@ def verify_output(directory: Path, source_manifest: Path | None = None) -> Embed
         raise ValueError('Embedding manifest totals mismatch')
     if source_manifest is not None:
         source = validate_input(source_manifest)
-        expected = {item['episode_id']: (item['sha256'], item['chunk_count']) for item in source['chunks']}
-        actual = {item['episode_id']: (item['source_sha256'], item['chunk_count']) for item in manifest['embeddings']}
-        if (manifest['source_manifest_sha256'] != sha256(source_manifest) or manifest['source_run'] != source_manifest.parent.name
+        expected = {item['episode_id']: item['chunk_count'] for item in source['chunks']}
+        actual = {item['episode_id']: item['chunk_count'] for item in manifest['embeddings']}
+        if (manifest['source_run'] != source_manifest.parent.name
                 or manifest['show'] != source['show'] or expected != actual):
             raise ValueError('Embedding output does not match its chunk source')
     return manifest
@@ -266,14 +208,11 @@ def run_embedding(source_manifest: Path, output: Path, model_cache: Path, batch_
     if batch_size < 1 or threads < 1:
         raise ValueError('Batch size and threads must be positive')
     source = validate_input(source_manifest)
-    source_hash = sha256(source_manifest)
-    model_inventory = verify_model(model_cache)
-    model_hash = model_digest(model_inventory)
+    verify_model(model_cache)
     config: Configuration = {'model_id': MODEL_ID, 'revision': MODEL_REVISION,
         'runtime': 'sentence-transformers', 'precision': 'float32', 'dimensions': DIMENSIONS,
         'normalized': True, 'document_prefix': DOCUMENT_PREFIX, 'query_prefix': QUERY_PREFIX,
         'max_tokens': MAX_TOKENS, 'batch_size': batch_size, 'threads': threads,
-        'model_manifest_sha256': model_hash, 'code_sha256': sha256(Path(__file__)),
         'packages': {name: version(name) for name in ('torch', 'transformers', 'sentence-transformers')} if encoder is None and source['chunk_count'] else {}}
     if source['chunk_count'] and encoder is None:
         encoder = SentenceEncoder(cached_snapshot(model_cache), batch_size, threads)
@@ -298,20 +237,15 @@ def run_embedding(source_manifest: Path, output: Path, model_cache: Path, batch_
                         validate_vector(vector)
                         record: EmbeddingRow = {'episode_id': item['episode_id'], 'chunk_index': index, 'embedding': vector}
                         stream.write(json.dumps(record, ensure_ascii=False, allow_nan=False) + '\n')
-            if sha256(path) != item['sha256']:
-                raise ValueError('Chunk source changed during embedding')
             artifacts.append({'episode_id': item['episode_id'], 'path': target.name,
-                'sha256': sha256(target), 'source_sha256': item['sha256'], 'chunk_count': len(rows)})
+                'chunk_count': len(rows)})
             print(f"Embedded {len(rows)} chunks: {item['episode_id']}", flush=True)
         manifest: EmbeddingManifest = {'version': 2, 'stage': 'embedding', 'show': source['show'],
-            'source_run': source_manifest.parent.name, 'source_manifest_sha256': source_hash,
+            'source_run': source_manifest.parent.name,
             'configuration': config, 'episode_count': len(artifacts),
             'chunk_count': sum(item['chunk_count'] for item in artifacts), 'embeddings': artifacts}
-        write_json(staging / 'model-manifest.json', model_inventory)
         write_json(staging / 'manifest.json', manifest)
         verify_output(staging, source_manifest)
-        if model_digest(verify_model(model_cache)) != model_hash:
-            raise ValueError('Model cache changed during embedding')
         readable_tree(staging)
         staging.rename(output)
     return manifest

@@ -2,24 +2,24 @@
 
 from collections.abc import Mapping
 from datetime import timedelta
-import hashlib
 import os
 from pathlib import Path
 import re
 from typing import TypedDict
+
+from radiofrance.libs.runs import run_folder
 
 from airflow.sdk import DAG, Param, task
 from airflow.sdk.definitions.param import ParamsDict
 from airflow.providers.docker.operators.docker import DockerOperator
 from docker.types import Mount
 
-from radiofrance.jobs.chunk import sha256, validate_source, verify_output
+from radiofrance.jobs.chunk import validate_source, verify_output
 
 
 class ChunkRun(TypedDict):
     download_run: str
     output_folder: str
-    source_sha256: str
 
 
 DOWNLOADS = Path('/opt/radiofrance/output')
@@ -33,20 +33,20 @@ with DAG(
     doc_md="""
 ## Purpose and flow
 Process one completed download run for RF_SHOW (default mecaniques-du-journalisme). `prepare_chunking`
-validates its transcript list and checksums. `chunk` runs the existing character
+validates its transcript list and files and counts. `chunk` runs the existing character
 chunker in a separate, network-disabled container. `verify_chunks` checks the
-output manifest, row counts, checksums and source-manifest provenance.
+output manifest, row counts, files and counts and source-manifest provenance.
 
 ## Configuration and running
 Build `radiofrance-chunk:pilot` from chunking/Dockerfile, create data/chunk-pilot
 as the project owner, and recreate Compose. The normal .env supplies the
 host path and UID/GID. In the trigger form, supply `download_run`, the basename
-of a completed data/download-pilot/airflow-<64-character-hash> directory.
+of a completed data/download-pilot/airflow-<run-id> directory.
 See chunking/README.md for commands. No API key or additional services are needed.
 
 ## Inputs, outputs and retries
 Only transcripts listed in the download manifest are processed. Output is a
-new data/chunk-pilot/airflow-<run-hash>/ directory containing per-episode CSVs
+new data/chunk-pilot/airflow-<run-id>/ directory containing per-episode CSVs
 and a versioned manifest. Empty downloads succeed with no CSVs. Inputs and the
 baseline remain unchanged. No embeddings, database imports, cloud calls or asset
 events occur. Trigger a new DAG run to repeat processing; automatic retries are
@@ -57,12 +57,12 @@ can be cleared and retried without rerunning the chunk container.
     catchup=False,
     max_active_runs=1,
     default_args={'retries': 0},
-    params=ParamsDict({'download_run': Param('', type='string', description='Completed download folder: airflow-<64-character hash>')}),
+    params=ParamsDict({'download_run': Param('', type='string', description='Completed download folder: airflow-<run-id>')}),
     tags=['radiofrance', 'chunking'],
 ) as dag:
     @task(multiple_outputs=False)
     def prepare_chunking(params: Mapping[str, str], run_id: str) -> ChunkRun:
-        """Validate the chosen download and return path references and its checksum.
+        """Validate the chosen download and return path references and its file presence.
 
         Read the manifest and listed transcripts; create no files, containers or
         network connections. Store only small references in the returned XCom.
@@ -70,16 +70,15 @@ can be cleared and retried without rerunning the chunk container.
         if not os.environ.get('RF_PROJECT_ROOT') or not Path(HOST).is_absolute():
             raise ValueError('Configure the host path before triggering this DAG')
         name = params['download_run']
-        if not re.fullmatch(r'airflow-[a-f0-9]{64}', name):
-            raise ValueError('download_run must be the airflow-<hash> download directory name')
+        if not re.fullmatch(r'airflow-[A-Za-z0-9_-]+', name):
+            raise ValueError('download_run must be the airflow-<run-id> download directory name')
         if not OUTPUTS.is_dir():
             raise ValueError('Create data/chunk-pilot and recreate Compose before running')
         path = DOWNLOADS / name / 'manifest.json'
         source = validate_source(path)
         if source['show'] != os.environ.get('RF_SHOW', 'mecaniques-du-journalisme'):
             raise ValueError('Download show does not match configured RF_SHOW')
-        return {'download_run': name, 'output_folder': 'airflow-' + hashlib.sha256(run_id.encode()).hexdigest(),
-                'source_sha256': sha256(path)}
+        return {'download_run': name, 'output_folder': run_folder(run_id)}
 
     @task
     def verify_chunks(state: ChunkRun) -> None:
@@ -89,7 +88,7 @@ can be cleared and retried without rerunning the chunk container.
         corrupt or mismatched artifacts. Modify no files and return no value.
         """
         manifest = verify_output(OUTPUTS / state['output_folder'])
-        if manifest['source_manifest_sha256'] != state['source_sha256'] or manifest['source_run'] != state['download_run']:
+        if manifest['source_run'] != state['download_run']:
             raise ValueError('Chunk output does not match the selected download')
         print(f"Verified {manifest['chunk_count']} chunks: data/chunk-pilot/{state['output_folder']}/manifest.json")
 

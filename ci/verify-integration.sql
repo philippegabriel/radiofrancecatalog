@@ -1,9 +1,9 @@
 -- Fixture is passed as a quoted psql variable, never interpolated as executable SQL.
 BEGIN;
 CREATE TEMP TABLE expected_episode ON COMMIT DROP AS
-SELECT episode_id, transcript_sha256, segment_count
+SELECT episode_id, segment_count
 FROM jsonb_to_recordset(:'fixture'::jsonb->'episodes')
- AS e(episode_id text, transcript_sha256 text, segment_count integer);
+ AS e(episode_id text, segment_count integer);
 DO $$ BEGIN
  IF (SELECT count(*) FROM expected_episode) <> 10
     OR (SELECT count(*) FROM rf) <> 10
@@ -17,7 +17,6 @@ DO $$ BEGIN
   LEFT JOIN rf r ON r.episode_id=i.id
   LEFT JOIN transcript t ON t.episode_id=i.id
   WHERE r.show IS DISTINCT FROM 'le-cours-de-l-histoire'
-     OR t.source_sha256 IS DISTINCT FROM e.transcript_sha256
      OR t.segment_count IS DISTINCT FROM e.segment_count
      OR (SELECT count(*) FROM transcript_segment s WHERE s.episode_id=i.id) <> e.segment_count
      OR NOT EXISTS (SELECT 1 FROM chunk_embedding c WHERE c.episode_id=i.id)

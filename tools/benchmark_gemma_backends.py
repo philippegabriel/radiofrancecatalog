@@ -1,7 +1,6 @@
 """Benchmark local Gemma GGUF servers without changing production services."""
 
 import csv
-import hashlib
 import json
 import math
 import os
@@ -73,7 +72,7 @@ def telemetry(pid: int) -> tuple[int, dict[str, str]]:
 
 
 def main() -> None:
-    """Save deterministic inputs, timings, vector checks, logs and model hashes.
+    """Save deterministic inputs, timings, vector checks, logs and model configuration.
 
     Each configuration starts a temporary server on port 18093, warms each
     workload once, then performs three timed requests. Servers run sequentially
@@ -108,12 +107,6 @@ def main() -> None:
     configs.insert(0, ('BF16', 'cpu', 4))
     references: dict[str, list[list[float]]] = {}
     measurements: list[Measurement] = []
-    hashes: dict[str, str] = {}
-    for model in ('BF16', 'Q8_0'):
-        path = OUT / f'models/embeddinggemma-2-{model}.gguf'
-        with path.open('rb') as stream:
-            hashes[model] = hashlib.file_digest(stream, 'sha256').hexdigest()
-    (OUT / 'model-hashes.json').write_text(json.dumps(hashes, indent=2))
     for model, backend, threads in configs:
         name = f'{model}-{backend}-t{threads}'
         command = [str(BIN), '-m', str(OUT / f'models/embeddinggemma-2-{model}.gguf'),

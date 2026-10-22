@@ -101,185 +101,89 @@ References: [pgvector images](https://github.com/pgvector/pgvector#docker),
 
 ## Schema and loader — increment 2
 
-This stage reads existing output; it does not rerun downloads, chunking or models.
-Airflow integration is described in increment 3 below. Start the existing database, build
-only the small loader image:
+The loader reads a completed embedding run and follows its `source_run` names to
+the chunk and download directories. It imports the catalogue, transcripts, chunks
+and vectors in a single transaction. It does not run models or initialize tables.
 
 ```bash
-sudo docker compose up -d --wait --wait-timeout 300 postgres
 sudo docker compose build database-loader
-```
-
-If the volume was initialized before the application-table script was added,
-follow the reset section above once. After that, loading requires no reset.
-The `database-loader` service is a one-off processing container under the `jobs`
-profile; normal `compose up` does not start it. It has application credentials and
-read-only artifact mounts, and installs only psycopg2, not model libraries.
-Compose passes credentials from `RF_DATABASE_PASSWORD` (or the default),
-so sudo does not need to preserve shell secrets.
-
-Choose your completed embedding directory under `data/embedding-pilot`. For
-example, the existing Airflow pilot can be loaded with:
-
-```bash
 sudo docker compose run --rm database-loader \
-  --embedding-manifest /input/embeddings/airflow-ccd46aa7980644d8f007ab96f6761145425b9bd40170f8d66dedd7ccabdeeff0/manifest.json \
+  --embedding-manifest /input/embeddings/RUN/manifest.json \
   --chunk-root /input/chunks --download-root /input/downloads
 ```
 
-Replace the directory basename if you selected a different run. The loader uses
-`source_run` and checksums to find its exact chunk and download ancestors in the
-explicit roots. It does not scan for the newest files. Their original run
-folders must still be available. Only downloaded transcripts listed in that
-chain are loaded: the merged catalogue also includes baseline episodes which
-may not yet have transcripts.
+Replace `RUN` with the selected directory under `data/embedding-pilot`.
+Compose supplies the application credentials. The service uses read-only artifact
+mounts and installs no model libraries. Run names must be unique across imports;
+repeat loading of the same completed run verifies it and creates no duplicates.
+For different data or configuration, generate a new run directory.
 
-### Tables
-
-| Tables | Meaning |
+| Tables | Purpose |
 | --- | --- |
-| `episode_identity`, `rf` | Compact integer identities and merged catalogue metadata |
-| `transcript`, `transcript_segment` | Immutable source checksums and ordered transcript segments |
-| `chunk_strategy`, `chunk_set`, `semantic_chunk` | Versioned chunking configuration, per-episode completion and segment boundaries |
-| `embedding_model`, `embedding_set`, `chunk_embedding` | Versioned encoder configuration, per-episode completion and normalized `vector(256)` values |
-| `import_run` | Completed import, source manifest hashes and counts |
+| `episode_identity`, `rf` | Integer identities, external episode IDs and catalogue metadata |
+| `transcript`, `transcript_segment` | Transcript counts and ordered segments |
+| `chunk_strategy`, `chunk_set`, `semantic_chunk` | Configuration JSON, counts and chunk boundaries |
+| `embedding_model`, `embedding_set`, `chunk_embedding` | Model configuration and normalized 256D vectors |
+| `import_run` | Completed embedding, chunk and download run names and counts |
 
-Chunk text is reconstructed from transcript segments; preflight rejects CSV text
-or timestamps that do not match those segments. Anonymous speaker labels remain
-unchanged. Configurations are fingerprinted from canonical JSON, including their
-implementation/runtime provenance. In this first implementation, the full encoder
-configuration includes batch size and thread count, so changing either also
-registers a separate configuration. Different strategies and models can coexist.
-A successful empty transcript/chunk set has an explicit completion record.
+Configurations are stored directly as unique JSON values with integer primary
+keys. Chunking configurations include an explicit name, version and parameters;
+embedding configurations include the pinned model revision, runtime and dimensions.
+No file digests or source-code fingerprints are calculated or stored.
 
-The canonical application schema is `database/init/20-application-schema.sql`.
-The former root `schema.sql` has been removed. Older E5/Make import scripts are
-not maintained for this schema. First-start scripts target an empty volume and
-do not update an existing database.
+The proof-of-concept checks file presence, source run names, episode membership,
+chunk text/boundaries, counts, vector dimensions and normalization. Foreign keys
+protect the relationships. Existing transcript text is compared when reused;
+existing chunk/vector sets are reused by episode, configuration and count.
+Conflicting input or SQL errors roll back the import. This is not a continuous
+byte-for-byte audit of existing database records.
 
-### Transaction and retry behavior
-
-Preflight verifies the source chain, checksums, catalogue IDs, chunk boundaries,
-text and vectors before database access. Each import uses one transaction and a
-transaction-scoped advisory lock, serializing pilot imports. Catalogue rows are
-upserted; immutable transcript, chunk and embedding records are reused only if
-their source/artifact checksums match. A conflict or SQL failure rolls back all
-changes, including catalogue updates and the completion record.
-
-Repeat the exact same command safely: it reports `already_imported: true` after
-checking completion provenance and per-episode counts. It does not reapply older
-catalogue metadata. The loader rechecks source files before commit and never
-modifies the input directories. Manual database edits are not covered by a full
-byte-for-byte integrity audit; completion/checksum records assume loader-owned data.
-
-The loader checks that application tables exist and rejects databases named other
-than `radiofrance`. There is no migration registry in this initial implementation.
-Future schema evolution will need an explicit update procedure; changing init SQL
-does not modify an existing volume. Connections use standard `PG*` settings, with
-optional `RF_DATABASE_DSN` for native execution; credentials are not command arguments.
-For example, native commands use `venv/airflow/bin/python -m radiofrance.jobs.database` with
-the same flags and host connection settings (`PGHOST=127.0.0.1`, `PGPORT=55432`).
-
-### Inspect the imported data
-
-Connect as shown above, then:
-
-```sql
-\dt
-SELECT count(*) FROM rf;
-SELECT count(*) FROM transcript;
-SELECT count(*) FROM semantic_chunk;
-SELECT count(*) FROM chunk_embedding;
-SELECT show, catalogue_episode_count, transcript_count, chunk_count, completed_at
-FROM import_run ORDER BY completed_at DESC;
-```
-
-Counts in `import_run` describe the selected import's scope, not necessarily new
-rows inserted, because artifacts can be reused across runs/configurations. No
-approximate vector index is added yet; retrieval benchmarking can guide that later.
-
-### Loader validation
-
-```bash
-venv/airflow/bin/pyright
-bash database/test/test-loader
-RF_TEST_PILOT_MANIFEST=data/embedding-pilot/hf-cache-validation-001/manifest.json \
-  bash database/test/test-loader
-```
-
-The test harness provisions a disposable PostgreSQL cluster, not your
-container database. Tests cover first-start schema/repeat imports, conflicting immutable
-data, transaction rollback, strategy/model coexistence, empty imports, changed
-files, invalid lineage and unrecoverable chunk text. The optional pilot test
-reads existing artifacts without model inference. The native PostgreSQL 18 check
-loaded 90 catalogue entries, 12 transcripts and 253 vectors and repeated without
-duplication. Docker image execution on PostgreSQL 17 remains a host-side check.
-
-The pilot loads one run in memory and performs straightforward inserts in one
-transaction. Corpus-scale batching and more granular concurrency can follow after
-measurement; they are not hidden behind this initial implementation.
+Add `--verify-only` to the same command for read-only verification of a completed
+import. It checks configurations, episode membership and row counts without
+repairing or importing missing data.
 
 ## Airflow loading — increment 3
 
-No schema update or volume reset is needed. Rebuild the loader image to include
-its read-only verifier and recreate Airflow to apply the new helper mounts and
-application connection settings:
-
-```bash
-sudo docker compose build database-loader
-sudo docker compose up -d --wait --wait-timeout 300 airflow
-```
-
-Enable and trigger **radiofrance_database** in the UI with:
-
-```json
-{"embedding_run": "airflow-ccd46aa7980644d8f007ab96f6761145425b9bd40170f8d66dedd7ccabdeeff0"}
-```
-
-Choose the basename of your completed directory in `data/embedding-pilot`.
-Manually generated names such as `run-001` also work. The flow is:
+Enable `radiofrance_database` and select the embedding run's directory basename
+in its `embedding_run` parameter. The flow is:
 
 ```text
 prepare_load → load_database → verify_database
 ```
 
-Preparation validates the full artifact chain and returns only the selected
-folder and manifest checksum through XCom. The loader runs on the Compose
-network with all artifact roots mounted read-only and no model dependencies.
-It checks the expected manifest checksum before writing. Its password is passed
-through DockerOperator's private environment, not its command or XCom.
+Preflight validates the selected chain and passes the run name through XCom.
+The Docker task loads it using the application account, and the final task
+verifies the committed result with a read-only transaction. Airflow metadata
+credentials are not passed to the processing container.
 
-The final task rechecks the selected artifacts and opens a **read-only,
-repeatable-read transaction** as `radiofrance`. It checks the committed import
-record and source hashes, exact chunking/model configuration, catalogue membership,
-and per-episode segment/chunk/vector counts and artifact fingerprints. Counts
-are scoped to this import's configurations, allowing unrelated runs to coexist.
-It never inserts, repairs or deletes database records. The existing limitation
-on manual edits still applies: this is not a byte-for-byte vector integrity audit.
+Trigger `radiofrance_pipeline` for automatic download → chunk → embedding →
+database handoffs. Stage DAGs remain available for manual use. If the loader
+commits but verification fails, retry the verification task for that run.
 
-Compose supplies `RF_DATABASE_HOST=postgres`, `RF_DATABASE_PORT=5432` and
-`RF_DATABASE_PASSWORD` to Airflow. The internal port stays 5432 even when the
-published host port is customized. `RF_DOCKER_NETWORK` controls both the actual
-Compose network name and the sibling worker's network (default `radiofrance_default`).
-The loader receives only the application account, not Airflow's metadata credentials.
+## Existing populated database
 
-If you already imported the chosen run manually, the DAG verifies and reuses it
-without duplicates. If the loader commits but the final task fails, clear only
-`verify_database` to retry the read, or trigger the same selected run again.
-Automatic retries remain disabled. You do not need a new embedding run or reset.
+The one-off [host database migration](MIGRATION.md) is complete. The destination
+contains catalogue, transcript and chunk data; Gemma embedding generation is
+separate. The source database and recovery files remain intact.
 
-The CLI also supports independent read-only verification using the same input
-arguments plus `--verify-only`. Orchestration additionally supplies
-`--expected-manifest-sha256` to protect the selected run across task boundaries.
-
-Offline DAG checks:
+For a database created before checksum removal, apply this once as the
+application role without resetting the volume:
 
 ```bash
-venv/airflow/bin/python -m unittest airflow/test/test_database.py
-venv/airflow/bin/pyright
+psql -h 127.0.0.1 -p 55432 -U radiofrance -d radiofrance -W \
+  -v ON_ERROR_STOP=1 -f database/remove_checksums.sql
 ```
 
-The database integration suite also checks missing completion, missing vectors,
-changed configuration and enforcement of the read-only transaction. Its optional
-253-vector pilot is verified after loading. DockerOperator execution must be
-checked on a host with access to the Docker daemon.
+Fresh installations already use the simplified schema. Rebuild all processing
+images and Airflow after upgrading the code, then recreate Airflow with Compose.
+
+## Loader tests
+
+```bash
+venv/airflow/bin/pyright
+bash ci/run-tests
+```
+
+Tests use an isolated PostgreSQL cluster and deterministic vectors. They cover
+transaction rollback, repeated imports, coexisting configurations, invalid vectors,
+missing records and the Airflow container wiring. No model download is required.

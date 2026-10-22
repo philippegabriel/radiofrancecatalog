@@ -1,6 +1,5 @@
 """Offline checks for whole-pipeline stage ordering and exact artifact handoffs."""
 
-import hashlib
 import copy
 from pathlib import Path
 import sys
@@ -53,7 +52,7 @@ class PipelineTests(unittest.TestCase):
             rendered.render_template_fields({'ti': ti})
             self.assertEqual(rendered.trigger_run_id, state[stage]['run_id'])
             assert isinstance(rendered.trigger_run_id, str)
-            self.assertEqual(state[stage]['folder'], 'airflow-' + hashlib.sha256(rendered.trigger_run_id.encode()).hexdigest())
+            self.assertEqual(state[stage]['folder'], f'airflow-pipeline__manual__first__{stage}')
             self.assertNotEqual(state[stage]['run_id'], other[stage]['run_id'])
             if stage == 'chunk':
                 self.assertEqual(rendered.conf, {'download_run': state['download']['folder']})

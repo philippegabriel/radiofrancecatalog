@@ -27,7 +27,6 @@ class DatabaseDagTests(unittest.TestCase):
         self.assertNotIn('PGPASSWORD', worker.environment)
         self.assertNotIn('private_environment', worker.template_fields)
         assert isinstance(worker.command, list)
-        self.assertIn('--expected-manifest-sha256', worker.command)
         self.assertFalse(worker.mount_tmp_dir)
         self.assertFalse(worker.do_xcom_push)
         self.assertTrue(dag_module.dag.doc_md)
@@ -46,21 +45,16 @@ class DatabaseDagTests(unittest.TestCase):
                     patch.object(dag_module, 'CHUNKS', root / 'chunks'), \
                     patch.object(dag_module, 'DOWNLOADS', root / 'downloads'):
                 state = dag_module.prepare_load.function({'embedding_run': 'embeddings-run'})
-                self.assertEqual(set(state), {'embedding_run', 'manifest_sha256'})
                 with patch.object(dag_module, 'verify_import') as verify:
-                    verify.return_value = {'embedding_manifest_sha256': state['manifest_sha256'],
+                    verify.return_value = {'embedding_run': state['embedding_run'],
                         'catalogue_episode_count': 1, 'transcript_count': 1, 'chunk_count': 1}
                     dag_module.verify_database.function(state)
-                    self.assertEqual(verify.call_args.args[0]['embedding_hash'], state['manifest_sha256'])
                     self.assertIn('dbname=radiofrance', verify.call_args.args[1])
                 with self.assertRaisesRegex(ValueError, 'basename'):
                     dag_module.prepare_load.function({'embedding_run': '../escape'})
                 (root / 'escape').symlink_to(root.parent, target_is_directory=True)
                 with self.assertRaises(ValueError):
                     dag_module.prepare_load.function({'embedding_run': 'escape'})
-                bad: dag_module.DatabaseRun = {**state, 'manifest_sha256': 'wrong'}
-                with self.assertRaisesRegex(ValueError, 'changed after preflight'):
-                    dag_module.selected_run(bad)
                 with patch.dict(os.environ, {'RF_DATABASE_PASSWORD': ''}):
                     with self.assertRaisesRegex(ValueError, 'password'):
                         dag_module.prepare_load.function({'embedding_run': 'embeddings-run'})

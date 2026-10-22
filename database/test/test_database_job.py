@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import psycopg2
 
-from radiofrance.jobs.chunk import run_chunking, sha256
+from radiofrance.jobs.chunk import run_chunking
 import radiofrance.jobs.database as job
 from radiofrance.jobs.embedding import run_embedding, write_json
 from tests import test_embedding_job as fixtures
@@ -55,9 +55,9 @@ class DatabaseJobTests(unittest.TestCase):
         write_json(transcript, {'transcript': [{'start': 0.0, 'end': 1.0, 'text': text}]})
         write_json(download / 'manifest.json', {'version': 1, 'show': 'mecaniques-du-journalisme',
             'catalogue_episode_count': 0 if empty else 1, 'new_episode_count': 0 if empty else 1,
-            'catalogue': {'path': 'catalogue.csv', 'sha256': sha256(download / 'catalogue.csv')},
-            'updates': {'path': 'updates.csv', 'sha256': sha256(download / 'updates.csv')},
-            'transcripts': [] if empty else [{'episode_id': identity, 'path': transcript.name, 'sha256': sha256(transcript)}]})
+            'catalogue': {'path': 'catalogue.csv'},
+            'updates': {'path': 'updates.csv'},
+            'transcripts': [] if empty else [{'episode_id': identity, 'path': transcript.name}]})
         run_chunking(download / 'manifest.json', chunks / name)
         cache = root / f'cache-{name}'
         fixtures.EmbeddingJobTests().model(cache)
@@ -77,17 +77,14 @@ class DatabaseJobTests(unittest.TestCase):
 
     def test_ten_episode_integration_assertions(self) -> None:
         """Run the artifact chain with fake inference, then exercise CI's real SQL assertions."""
-        import hashlib
         import radiofrance.jobs.download as download_job
         from radiofrance.libs.episode_selection import read_selection
         from tests.test_download_job import episode
         project = Path(__file__).resolve().parents[2]
         selection = read_selection(project / 'ci/fixtures/le-cours-de-l-histoire.json', 'le-cours-de-l-histoire')
         transcript: Transcript = {'transcript': [{'start': 0.0, 'end': 1.0, 'text': 'Texte français.'}]}
-        fingerprint = hashlib.sha256((json.dumps(transcript, ensure_ascii=False, indent=2) + '\n').encode()).hexdigest()
         rows = []
         for item in selection['episodes']:
-            item['transcript_sha256'] = fingerprint
             item['segment_count'] = 1
             row = episode(item['episode_id'], item['published_ts'])
             row['show'] = selection['show']
@@ -137,6 +134,8 @@ class DatabaseJobTests(unittest.TestCase):
             manifest = json.loads(path.read_text())
             manifest['configuration']['threads'] = 2
             write_json(path, manifest)
+            path.parent.rename(root / 'embeddings-variant')
+            path = root / 'embeddings-variant/manifest.json'
             variant = job.prepare(path, root / 'chunks', root / 'downloads')
             job.load(variant, self.dsn)
             self.assertEqual(self.counts(), (2, 1, 2))
@@ -144,8 +143,9 @@ class DatabaseJobTests(unittest.TestCase):
             chunk_manifest = json.loads(chunk_path.read_text())
             chunk_manifest['strategy']['target_size'] = 2000
             write_json(chunk_path, chunk_manifest)
-            manifest['source_manifest_sha256'] = sha256(chunk_path)
             write_json(path, manifest)
+            path.parent.rename(root / 'embeddings-strategy')
+            path = root / 'embeddings-strategy/manifest.json'
             job.load(job.prepare(path, root / 'chunks', root / 'downloads'), self.dsn)
             self.assertEqual(self.counts(), (3, 1, 3))
 
@@ -176,16 +176,14 @@ class DatabaseJobTests(unittest.TestCase):
                 job.load(prepared, self.dsn)
             self.assertEqual(self.counts(), (0, 0, 0))
 
-    def test_empty_run_and_changed_source(self) -> None:
-        """Record successful empty work explicitly and reject changed artifacts before writing."""
+    def test_empty_run_is_idempotent(self) -> None:
+        """Record successful empty work explicitly and repeat without duplicate records."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             prepared = self.fixture(root, empty=True)
             self.assertEqual(job.load(prepared, self.dsn)['chunk_count'], 0)
             self.assertEqual(self.counts(), (1, 0, 0))
-            next(iter(prepared['files'])).write_text('{}')
-            with self.assertRaisesRegex(ValueError, 'changed'):
-                job.load(prepared, self.dsn)
+            self.assertTrue(job.load(prepared, self.dsn)['already_imported'])
             self.assertEqual(self.counts(), (1, 0, 0))
 
     def test_verification_requires_committed_complete_import(self) -> None:
@@ -237,14 +235,15 @@ class DatabaseJobTests(unittest.TestCase):
             self.assertEqual(self.counts(), (1, 1, 1))
 
     def test_bad_lineage_and_unrecoverable_text(self) -> None:
-        """Reject a mismatched parent checksum and CSV text that cannot be reconstructed."""
+        """Reject a missing source run and CSV text that cannot be reconstructed."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             prepared = self.fixture(root)
             path = root / 'chunks/run/manifest.json'
             manifest = json.loads(path.read_text())
             original = path.read_bytes()
-            manifest['source_manifest_sha256'] = '0' * 64
+            manifest['source_run'] = 'missing-run'
+            write_json(path, manifest)
             write_json(path, manifest)
             with self.assertRaises(ValueError):
                 job.prepare(root / 'embeddings-run/manifest.json', root / 'chunks', root / 'downloads')
@@ -258,12 +257,9 @@ class DatabaseJobTests(unittest.TestCase):
             rows[0][6] = 'Text absent from transcript'
             with csv_path.open('w', newline='') as stream:
                 csv.writer(stream).writerows(rows)
-            manifest['chunks'][0]['sha256'] = sha256(csv_path)
             write_json(path, manifest)
             embedding_path = root / 'embeddings-run/manifest.json'
             embedding_manifest = json.loads(embedding_path.read_text())
-            embedding_manifest['source_manifest_sha256'] = sha256(path)
-            embedding_manifest['embeddings'][0]['source_sha256'] = sha256(csv_path)
             write_json(embedding_path, embedding_manifest)
             with self.assertRaisesRegex(ValueError, 'text/timestamps'):
                 job.prepare(embedding_path, root / 'chunks', root / 'downloads')

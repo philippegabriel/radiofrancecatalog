@@ -78,16 +78,14 @@ the selected chunk artifacts and cache-path configuration. The worker verifies
 the pinned model cache and performs inference. Airflow then verifies the output,
 source provenance and recorded model inventory. The worker has no network, uses
 read-only source/cache mounts, and has a writable output mount and 4 GiB limit.
-Outputs appear in `data/embedding-pilot/airflow-<DAG-run-hash>/`.
+Outputs appear in `data/embedding-pilot/airflow-<run-id>/`.
 
 ## Outputs and retries
 
 Each episode produces JSONL records containing `episode_id`, `chunk_index` and
 an `embedding` array of 256 finite, unit-normalized coordinates.
-The version-2 completion manifest records source/output checksums, counts,
-model revision, runtime versions and embedding configuration. A separate
-`model-manifest.json` records model-file checksums inside the output run; nothing
-is written into the Hugging Face cache. Older version-1 outputs remain verifiable.
+The completion manifest records the source run, file paths, counts, model revision,
+runtime versions and embedding configuration. No model-file inventory is created.
 
 Documents use `title: none | text: `. Future search queries must use the same
 model, dimensions and normalization with `task: search result | query: `.

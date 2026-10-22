@@ -87,7 +87,7 @@ The existing AWS secrets and `AIRFLOW_FERNET_KEY` are not used. The workflow run
 entirely on a disposable Ubuntu runner; it does not connect to your installation.
 It creates an empty baseline and selects exactly the ten committed episode IDs
 in `fixtures/le-cours-de-l-histoire.json`. Metadata and transcripts are fetched
-live, with transcript fingerprints and segment counts checked before publication.
+live, with transcript segment counts checked before publication.
 A missing episode or changed transcript fails the run without substitution.
 
 It builds all five images from the selected checkout, downloads the pinned model
@@ -99,7 +99,7 @@ reimplement the stage orchestration. Inference uses the existing CPU FP32
 SentenceTransformers container and normalized 256-dimensional vectors.
 
 After Airflow succeeds, `verify-integration.sql` checks exact episode membership,
-transcript fingerprints/segment counts, nonempty embeddings per episode, vector
+transcript segment counts, nonempty embeddings per episode, vector
 dimensions/normalization and import counts. A successful DAG alone is insufficient.
 The controller refreshes its API token for longer runs. It waits up to 90 minutes
 for the pipeline; the job has a 150-minute total limit for image builds and model

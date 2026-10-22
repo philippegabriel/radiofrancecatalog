@@ -2,20 +2,18 @@
 
 import argparse
 import csv
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import re
-import sys
 from typing import TypedDict, cast
 
 import psycopg2
 from psycopg2 import sql
 from psycopg2.extensions import cursor as Cursor
 
-from radiofrance.jobs.chunk import ChunkManifest, DownloadManifest, contained_file, sha256, validate_source, verify_output as verify_chunks
+from radiofrance.jobs.chunk import ChunkManifest, DownloadManifest, contained_file, validate_source, verify_output as verify_chunks
 from radiofrance.jobs.embedding import EmbeddingManifest, EmbeddingRow, verify_output as verify_embeddings
 from radiofrance.libs.types import TranscriptSegment
 from radiofrance.libs.transcript_json import read_segments
@@ -29,7 +27,6 @@ SQL = files('radiofrance.sql')
 
 class Artifact(TypedDict):
     path: str
-    sha256: str
 
 
 class CatalogueManifest(DownloadManifest):
@@ -40,23 +37,19 @@ class CatalogueManifest(DownloadManifest):
 
 class Episode(TypedDict):
     external_id: str
-    transcript_sha256: str
-    chunk_sha256: str
-    embedding_sha256: str
     segments: list[TranscriptSegment]
     chunks: list[list[str]]
     embeddings: list[EmbeddingRow]
 
 
 class Prepared(TypedDict):
-    embedding_hash: str
-    chunk_hash: str
-    download_hash: str
+    embedding_run: str
+    chunk_run: str
+    download_run: str
     catalogue: list[CatalogueRow]
     episodes: list[Episode]
     chunks: ChunkManifest
     embeddings: EmbeddingManifest
-    files: dict[Path, str]
 
 
 class LoadResult(TypedDict):
@@ -64,7 +57,7 @@ class LoadResult(TypedDict):
     catalogue_episode_count: int
     transcript_count: int
     chunk_count: int
-    embedding_manifest_sha256: str
+    embedding_run: str
 
 
 def canonical(value: object) -> str:
@@ -88,23 +81,17 @@ def prepare(embedding_manifest: Path, chunk_root: Path, download_root: Path) -> 
     """Read and validate the full lineage, catalogue, chunk text and vectors without DB access."""
     if embedding_manifest.name != 'manifest.json':
         raise ValueError('Expected embedding manifest.json')
-    embedding_hash = sha256(embedding_manifest)
+    embedding_run = embedding_manifest.parent.name
     embeddings = verify_embeddings(embedding_manifest.parent)
     chunk_path = source_run(chunk_root, embeddings['source_run'])
-    chunk_hash = sha256(chunk_path)
+    chunk_run = chunk_path.parent.name
     chunks = verify_chunks(chunk_path.parent)
     verify_embeddings(embedding_manifest.parent, chunk_path)
     download_path = source_run(download_root, chunks['source_run'])
-    download_hash = sha256(download_path)
+    download_run = download_path.parent.name
     download = cast(CatalogueManifest, validate_source(download_path))
-    if chunks['source_manifest_sha256'] != sha256(download_path) or chunks['show'] != download['show']:
+    if chunks['show'] != download['show']:
         raise ValueError('Chunk/download lineage mismatch')
-    files = {embedding_manifest: embedding_hash, chunk_path: chunk_hash, download_path: download_hash}
-    for item in (download['catalogue'], download['updates']):
-        path = contained_file(download_path.parent, item['path'])
-        if sha256(path) != item['sha256']:
-            raise ValueError('Catalogue checksum mismatch')
-        files[path] = item['sha256']
     catalogue = read_rows(contained_file(download_path.parent, download['catalogue']['path']), download['show'])
     updates = read_rows(contained_file(download_path.parent, download['updates']['path']), download['show'])
     ids = {row['id'] for row in catalogue}
@@ -121,13 +108,8 @@ def prepare(embedding_manifest: Path, chunk_root: Path, download_root: Path) -> 
     for identity, item in transcripts.items():
         transcript_path = contained_file(download_path.parent, item['path'])
         chunk_item, embedding_item = chunk_files[identity], embedding_files[identity]
-        if chunk_item['source_sha256'] != item['sha256']:
-            raise ValueError('Chunk/transcript checksum mismatch')
         chunk_file = contained_file(chunk_path.parent, chunk_item['path'])
         embedding_file = contained_file(embedding_manifest.parent, embedding_item['path'])
-        for path, checksum in ((transcript_path, item['sha256']), (chunk_file, chunk_item['sha256']),
-                               (embedding_file, embedding_item['sha256'])):
-            files[path] = checksum
         segments = read_segments(transcript_path)
         if any(not math.isfinite(s[key]) for s in segments for key in ('start', 'end')):
             raise ValueError('Nonfinite transcript time')
@@ -142,34 +124,22 @@ def prepare(embedding_manifest: Path, chunk_root: Path, download_root: Path) -> 
                     or float(row[5]) != segments[end]['end']):
                 raise ValueError('Chunk text/timestamps do not match transcript')
         vectors = [cast(EmbeddingRow, json.loads(line)) for line in embedding_file.read_text().splitlines()]
-        episodes.append({'external_id': identity, 'transcript_sha256': item['sha256'],
-            'chunk_sha256': chunk_item['sha256'], 'embedding_sha256': embedding_item['sha256'],
+        episodes.append({'external_id': identity,
             'segments': segments, 'chunks': rows, 'embeddings': vectors})
-    if embeddings['version'] == 2:
-        inventory = contained_file(embedding_manifest.parent, 'model-manifest.json')
-        files[inventory] = embeddings['configuration']['model_manifest_sha256']
-    result: Prepared = {'embedding_hash': files[embedding_manifest], 'chunk_hash': files[chunk_path],
-        'download_hash': files[download_path], 'catalogue': catalogue, 'episodes': episodes,
-        'chunks': chunks, 'embeddings': embeddings, 'files': files}
-    verify_files(result)
-    return result
-
-
-def verify_files(prepared: Prepared) -> None:
-    """Reject artifacts that changed while validation or database loading was in progress."""
-    if any(sha256(path) != expected for path, expected in prepared['files'].items()):
-        raise ValueError('Source artifact changed during loading')
+    return {'embedding_run': embedding_run, 'chunk_run': chunk_run,
+        'download_run': download_run, 'catalogue': catalogue, 'episodes': episodes,
+        'chunks': chunks, 'embeddings': embeddings}
 
 
 def register(cursor: Cursor, table: str, configuration: object) -> int:
-    """Reuse an exact configuration or register it under its canonical SHA256."""
+    """Reuse an exact JSON configuration or register a new integer identity."""
     content = canonical(configuration)
     query = sql.SQL(SQL.joinpath('configuration.sql').read_text()).format(table=sql.Identifier(table))
-    cursor.execute(query, (hashlib.sha256(content.encode()).hexdigest(), content))
+    cursor.execute(query, (content,))
     row = cursor.fetchone()
     assert row is not None
     if canonical(row[1]) != content:
-        raise ValueError('Configuration fingerprint conflict')
+        raise ValueError('Configuration conflict')
     return int(row[0])
 
 
@@ -177,7 +147,7 @@ def load_episode(cursor: Cursor, episode: Episode, identity: int, strategy: int,
                  verify_only: bool = False) -> None:
     """Insert immutable transcript/chunk/embedding sets or reject conflicting existing artifacts."""
     segments, chunks, embeddings = episode['segments'], episode['chunks'], episode['embeddings']
-    expected_transcript = (episode['transcript_sha256'], len(segments))
+    expected_transcript = (len(segments),)
     execute(cursor, 'transcript_lookup', (identity,))
     existing = cursor.fetchone()
     if existing is None and verify_only:
@@ -188,7 +158,12 @@ def load_episode(cursor: Cursor, episode: Episode, identity: int, strategy: int,
             execute(cursor, 'segment', (identity, seq, segment['start'], segment['end'], segment.get('speaker'), segment['text']))
     elif tuple(existing) != expected_transcript:
         raise ValueError('Conflicting immutable transcript')
-    expected_chunks = (episode['transcript_sha256'], episode['chunk_sha256'], len(chunks))
+    if existing is not None:
+        cursor.execute('SELECT seq,start_time,end_time,speaker,text FROM transcript_segment WHERE episode_id=%s ORDER BY seq', (identity,))
+        expected_segments = [(seq, item['start'], item['end'], item.get('speaker'), item['text']) for seq, item in enumerate(segments)]
+        if cursor.fetchall() != expected_segments:
+            raise ValueError('Conflicting immutable transcript')
+    expected_chunks = (len(chunks),)
     execute(cursor, 'chunk_set_lookup', (identity, strategy))
     existing = cursor.fetchone()
     if existing is None and verify_only:
@@ -199,7 +174,7 @@ def load_episode(cursor: Cursor, episode: Episode, identity: int, strategy: int,
             execute(cursor, 'chunk', (identity, strategy, int(row[1]), int(row[2]), int(row[3]), float(row[4]), float(row[5])))
     elif tuple(existing) != expected_chunks:
         raise ValueError('Conflicting immutable chunks')
-    expected_embeddings = (episode['chunk_sha256'], episode['embedding_sha256'], len(embeddings))
+    expected_embeddings = (len(embeddings),)
     execute(cursor, 'embedding_set_lookup', (identity, strategy, model))
     existing = cursor.fetchone()
     if existing is None and verify_only:
@@ -219,11 +194,11 @@ def verify_committed(cursor: Cursor, prepared: Prepared) -> None:
     """Read committed provenance, configurations, catalogue membership and per-episode counts.
 
     The caller supplies a transaction snapshot. No records are created or repaired;
-    missing completion, mismatched fingerprints and missing child rows fail.
+    missing completion, mismatched configurations and missing child rows fail.
     """
-    execute(cursor, 'run_lookup', (prepared['embedding_hash'],))
+    execute(cursor, 'run_lookup', (prepared['embedding_run'],))
     previous = cursor.fetchone()
-    expected = (prepared['chunk_hash'], prepared['download_hash'], prepared['embeddings']['show'],
+    expected = (prepared['chunk_run'], prepared['download_run'], prepared['embeddings']['show'],
         len(prepared['catalogue']), len(prepared['episodes']), prepared['embeddings']['chunk_count'])
     if previous is None or tuple(previous[:6]) != expected:
         raise ValueError('Committed import is missing or has different provenance')
@@ -246,7 +221,6 @@ def verify_committed(cursor: Cursor, prepared: Prepared) -> None:
 
 def verify_database(prepared: Prepared, dsn: str) -> LoadResult:
     """Verify a committed import in a read-only repeatable-read snapshot; never write DB/files."""
-    verify_files(prepared)
     connection = psycopg2.connect(dsn)
     try:
         connection.set_session(readonly=True, isolation_level='REPEATABLE READ')
@@ -255,25 +229,23 @@ def verify_database(prepared: Prepared, dsn: str) -> LoadResult:
                 raise ValueError('Refusing verification outside the radiofrance database')
             with connection.cursor() as cursor:
                 verify_committed(cursor, prepared)
-            verify_files(prepared)
     finally:
         connection.close()
     return {'already_imported': True, 'catalogue_episode_count': len(prepared['catalogue']),
         'transcript_count': len(prepared['episodes']), 'chunk_count': prepared['embeddings']['chunk_count'],
-        'embedding_manifest_sha256': prepared['embedding_hash']}
+        'embedding_run': prepared['embedding_run']}
 
 
 def load(prepared: Prepared, dsn: str) -> LoadResult:
     """Commit one verified pipeline run atomically; repeat imports are a no-op.
 
     Serialize imports with a transaction-scoped advisory lock. Any conflict, SQL
-    error or changed input rolls back catalogue updates and all imported records.
+    error or invalid input rolls back catalogue updates and all imported records.
     Only committed import_run rows represent successful loads, including empty runs.
     """
-    verify_files(prepared)
     result: LoadResult = {'already_imported': False, 'catalogue_episode_count': len(prepared['catalogue']),
         'transcript_count': len(prepared['episodes']), 'chunk_count': prepared['embeddings']['chunk_count'],
-        'embedding_manifest_sha256': prepared['embedding_hash']}
+        'embedding_run': prepared['embedding_run']}
     connection = psycopg2.connect(dsn)
     try:
         with connection:
@@ -284,9 +256,9 @@ def load(prepared: Prepared, dsn: str) -> LoadResult:
                 row = cursor.fetchone()
                 if row is None or row[0] is None:
                     raise ValueError('Application tables are missing; initialize a fresh database volume with the current init scripts')
-                execute(cursor, 'run_lookup', (prepared['embedding_hash'],))
+                execute(cursor, 'run_lookup', (prepared['embedding_run'],))
                 previous = cursor.fetchone()
-                expected = (prepared['chunk_hash'], prepared['download_hash'], prepared['embeddings']['show'],
+                expected = (prepared['chunk_run'], prepared['download_run'], prepared['embeddings']['show'],
                     len(prepared['catalogue']), len(prepared['episodes']), prepared['embeddings']['chunk_count'])
                 if previous is not None:
                     if tuple(previous[:6]) != expected:
@@ -309,10 +281,9 @@ def load(prepared: Prepared, dsn: str) -> LoadResult:
                             entry['podcast_title'], entry['podcast_url'], entry['player_url']))
                     for episode in prepared['episodes']:
                         load_episode(cursor, episode, identities[episode['external_id']], strategy, model)
-                    execute(cursor, 'run', (prepared['embedding_hash'], prepared['chunk_hash'], prepared['download_hash'],
+                    execute(cursor, 'run', (prepared['embedding_run'], prepared['chunk_run'], prepared['download_run'],
                         prepared['embeddings']['show'], strategy, model, len(prepared['catalogue']),
                         len(prepared['episodes']), prepared['embeddings']['chunk_count']))
-                verify_files(prepared)
     finally:
         connection.close()
     return result
@@ -324,13 +295,10 @@ def main() -> None:
     parser.add_argument('--embedding-manifest', type=Path, required=True)
     parser.add_argument('--chunk-root', type=Path, default=Path('data/chunk-pilot'))
     parser.add_argument('--download-root', type=Path, default=Path('data/download-pilot'))
-    parser.add_argument('--expected-manifest-sha256', help='Reject a different manifest than orchestration selected')
     parser.add_argument('--verify-only', action='store_true', help='Read-only verification of an already committed import')
     args = parser.parse_args()
     dsn = os.environ.get('RF_DATABASE_DSN', '')
     prepared = prepare(args.embedding_manifest, args.chunk_root, args.download_root)
-    if args.expected_manifest_sha256 and prepared['embedding_hash'] != args.expected_manifest_sha256:
-        raise ValueError('Embedding manifest changed after selection')
     operation = verify_database if args.verify_only else load
     print(json.dumps(operation(prepared, dsn)))
 

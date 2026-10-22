@@ -1,6 +1,5 @@
 """Offline checks for processing container wiring and manifest validation."""
 
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -37,20 +36,20 @@ class LocalDownloadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary) / 'run'
             directory.mkdir()
-            artifact: dag_module.Artifact = {'path': 'catalogue.csv', 'sha256': hashlib.sha256(b'csv').hexdigest()}
+            artifact: dag_module.Artifact = {'path': 'catalogue.csv'}
             (directory / 'baseline.csv').write_bytes(b'csv')
-            manifest: dag_module.Manifest = {'show': dag_module.SHOW, 'baseline_sha256': artifact['sha256'],
+            manifest: dag_module.Manifest = {'show': dag_module.SHOW,
                                        'updates': artifact, 'catalogue': artifact, 'transcripts': []}
             (directory / 'catalogue.csv').write_bytes(b'csv')
             path = directory / 'manifest.json'
             path.write_text(json.dumps(manifest))
             dag_module.verify_artifacts(directory)
-            (directory / 'catalogue.csv').write_bytes(b'corrupt')
-            with self.assertRaisesRegex(ValueError, 'Checksum'):
+            (directory / 'catalogue.csv').unlink()
+            with self.assertRaisesRegex(ValueError, 'must be a file'):
                 dag_module.verify_artifacts(directory)
             artifact['path'] = '../outside.csv'
             path.write_text(json.dumps(manifest))
-            with self.assertRaisesRegex(ValueError, 'escapes'):
+            with self.assertRaisesRegex(ValueError, 'must be a file'):
                 dag_module.verify_artifacts(directory)
 
     def test_preflight_does_not_accept_missing_configuration(self) -> None:

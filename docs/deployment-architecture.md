@@ -45,7 +45,7 @@ assets are not needed for the target design.
    containerized pipeline integration in GitHub Actions remains a separate step.
 
 The [download pilot](../download/README.md) already supports files and
-container execution. Its manifest records artifact paths and checksums. Keep that
+container execution. Its manifest records artifact paths and counts. Keep that
 boundary and publish completion only after successful processing. Reconcile its
 baseline-derived cutoff with the existing DAG's cutoff before connecting them.
 

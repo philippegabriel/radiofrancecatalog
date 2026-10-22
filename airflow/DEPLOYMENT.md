@@ -188,8 +188,8 @@ prepare_download -> download (DockerOperator) -> verify_download
 
 The download container reads the baseline and key read-only, writes outputs as
 your host UID/GID, and is removed after the task finishes. Its stdout appears in
-the Airflow task log; the final task verifies the show and artifact checksums.
-Artifacts remain under `data/download-pilot/airflow-<run-hash>/`, including
+the Airflow task log; the final task verifies the show and artifact files and counts.
+Artifacts remain under `data/download-pilot/airflow-<run-id>/`, including
 `manifest.json`, the cumulative CSV, updates and any new transcripts. No API key
 appears in the command line. There are no S3 calls, asset events or DB imports.
 
@@ -286,7 +286,7 @@ worker slots for child processing; the scheduler and triggerer must be healthy.
 A paused child fails the parent task with a useful error rather than waiting
 indefinitely. Open the parent task's triggered-DAG link or the child DAG's run
 list to inspect detailed processing logs. Child run IDs have a `pipeline__` prefix
-and identify the parent through its run-ID hash.
+and identify the parent through its readable run ID.
 
 The pipeline passes explicit run-directory references; it never scans for the
 latest output. Files remain in `data/download-pilot`, `data/chunk-pilot` and

@@ -1,3 +1,3 @@
-SELECT chunk_manifest_sha256, download_manifest_sha256, show,
+SELECT chunk_run, download_run, show,
  catalogue_episode_count, transcript_count, chunk_count, strategy_id, model_id
-FROM import_run WHERE embedding_manifest_sha256=%s;
+FROM import_run WHERE embedding_run=%s;

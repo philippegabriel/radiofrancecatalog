@@ -41,8 +41,8 @@ class LocalEmbeddingTests(unittest.TestCase):
                 state = dag_module.prepare_embedding.function({'chunk_run': name}, 'manual-test')
                 run_embedding(source, outputs / state['output_folder'], model, encoder=fixtures.FakeEncoder())
                 dag_module.verify_embeddings.function(state)
-                bad: dag_module.EmbeddingRun = {**state, 'source_sha256': 'wrong'}
-                with self.assertRaisesRegex(ValueError, 'provenance'):
+                bad: dag_module.EmbeddingRun = {**state, 'chunk_run': name + '-wrong'}
+                with self.assertRaises((ValueError, FileNotFoundError)):
                     dag_module.verify_embeddings.function(bad)
                 with self.assertRaisesRegex(ValueError, 'directory name'):
                     dag_module.prepare_embedding.function({'chunk_run': '../escape'}, 'manual-test')

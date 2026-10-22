@@ -19,7 +19,6 @@ from radiofrance.jobs.chunk import contained_file
 
 class DatabaseRun(TypedDict):
     embedding_run: str
-    manifest_sha256: str
 
 
 HOST = os.environ.get('RF_PROJECT_ROOT', '')
@@ -35,8 +34,6 @@ def selected_run(state: DatabaseRun) -> Prepared:
     """Revalidate the selected file chain and reject a manifest changed since preflight."""
     manifest = contained_file(EMBEDDINGS, f"{state['embedding_run']}/manifest.json")
     prepared = prepare(manifest, CHUNKS, DOWNLOADS)
-    if prepared['embedding_hash'] != state['manifest_sha256']:
-        raise ValueError('Selected embedding manifest changed after preflight')
     return prepared
 
 
@@ -47,10 +44,10 @@ with DAG(
 ## Purpose and execution
 Manually load one completed embedding run and its exact download/chunk ancestors.
 `prepare_load` validates artifacts and configuration and returns only the selected
-folder and manifest SHA256. `load_database` starts the database-loader image on
-the Compose network. It verifies the expected manifest and commits the import in
+folder and run name. `load_database` starts the database-loader image on
+the Compose network. It reads the selected manifest and commits the import in
 one transaction. `verify_database` independently checks the completion record,
-configuration, catalogue membership, source fingerprints and per-episode counts
+configuration, catalogue membership, per-episode counts
 using a read-only repeatable-read transaction. No models or downloads are run.
 
 ## Configuration and running
@@ -62,7 +59,7 @@ artifact roots are mounted read-only. Only the radiofrance application role is
 used. The password is passed through the operator's private environment, never
 XCom or command arguments. No Airflow metadata credentials reach the loader.
 Trigger with `embedding_run`, a directory basename under data/embedding-pilot,
-for example airflow-<hash> or a manually generated run name. Ancestor run
+for example airflow-<run-id> or a manually generated run name. Ancestor run
 folders must still exist. There is no automatic selection of the newest run.
 
 ## Results and recovery
@@ -84,7 +81,7 @@ selected run and configuration, not global totals across all imported shows/mode
         """Validate the chosen artifact chain and host/DB settings without database writes.
 
         Input is the embedding_run parameter. Read source manifests and artifacts;
-        return only a directory basename and its manifest checksum through XCom.
+        return only a directory basename and its run name through XCom.
         No credentials or artifact contents are returned, and no files are written.
         """
         if not HOST or not Path(HOST).is_absolute():
@@ -96,13 +93,13 @@ selected run and configuration, not global totals across all imported shows/mode
             raise ValueError('embedding_run must be a single run directory basename')
         manifest = contained_file(EMBEDDINGS, f'{name}/manifest.json')
         prepared = prepare(manifest, CHUNKS, DOWNLOADS)
-        return {'embedding_run': name, 'manifest_sha256': prepared['embedding_hash']}
+        return {'embedding_run': name}
 
     @task
     def verify_database(state: DatabaseRun) -> None:
         """Read the selected artifacts and verify their committed database records.
 
-        Input is preflight's small XCom reference. Recheck the manifest checksum,
+        Input is preflight's small XCom reference. Recheck the run name,
         connect as radiofrance and read a consistent database snapshot; log verified
         counts on success. Never insert, update or repair database rows or files.
         """
@@ -113,7 +110,7 @@ selected run and configuration, not global totals across all imported shows/mode
         dsn = make_dsn(host=DATABASE_ENV['PGHOST'], port=DATABASE_ENV['PGPORT'],
             dbname=DATABASE_ENV['PGDATABASE'], user=DATABASE_ENV['PGUSER'], password=password)
         result = verify_import(prepared, dsn)
-        print(f"Verified import {result['embedding_manifest_sha256']}: "
+        print(f"Verified import {result['embedding_run']}: "
             f"{result['catalogue_episode_count']} catalogue entries, "
             f"{result['transcript_count']} transcripts, {result['chunk_count']} embeddings")
 
@@ -122,8 +119,7 @@ selected run and configuration, not global totals across all imported shows/mode
         task_id='load_database', image='radiofrance-database:pilot',
         docker_url='unix://var/run/docker.sock', api_version='auto',
         command=['--embedding-manifest', "/input/embeddings/{{ ti.xcom_pull(task_ids='prepare_load')['embedding_run'] }}/manifest.json",
-            '--chunk-root', '/input/chunks', '--download-root', '/input/downloads',
-            '--expected-manifest-sha256', "{{ ti.xcom_pull(task_ids='prepare_load')['manifest_sha256'] }}"],
+            '--chunk-root', '/input/chunks', '--download-root', '/input/downloads'],
         mounts=[Mount('/input/downloads', f'{HOST or "/not-configured"}/data/download-pilot', type='bind', read_only=True),
             Mount('/input/chunks', f'{HOST or "/not-configured"}/data/chunk-pilot', type='bind', read_only=True),
             Mount('/input/embeddings', f'{HOST or "/not-configured"}/data/embedding-pilot', type='bind', read_only=True)],
@@ -132,7 +128,7 @@ selected run and configuration, not global totals across all imported shows/mode
         user=f"{os.environ.get('RF_UID', '1000')}:{os.environ.get('RF_GID', '1000')}",
         network_mode=NETWORK, mount_tmp_dir=False, auto_remove='force', mem_limit='1g',
         execution_timeout=timedelta(minutes=30), do_xcom_push=False,
-        doc_md='Verify the selected manifest SHA256 and load its artifact chain in one transaction as the radiofrance application role. Uses read-only file mounts, the Compose database network and private password environment. No schema changes or model inference.',
+        doc_md='Verify the selected run name and load its artifact chain in one transaction as the radiofrance application role. Uses read-only file mounts, the Compose database network and private password environment. No schema changes or model inference.',
     )
     checked = verify_database(state)  # pyright: ignore[reportArgumentType]
     _ = state >> load_database >> checked

@@ -19,7 +19,7 @@ CREATE VIEW rf_external AS
  SELECT r.*, e.external_id FROM rf r JOIN episode_identity_external e ON e.id=r.episode_id;
 CREATE TABLE transcript (
  episode_id integer PRIMARY KEY REFERENCES rf,
- source_sha256 text NOT NULL, segment_count integer NOT NULL CHECK(segment_count >= 0)
+ segment_count integer NOT NULL CHECK(segment_count >= 0)
 );
 CREATE TABLE transcript_segment (
  episode_id integer REFERENCES transcript, seq integer CHECK(seq >= 0),
@@ -28,11 +28,10 @@ CREATE TABLE transcript_segment (
 );
 CREATE TABLE chunk_strategy (
  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
- configuration_sha256 text NOT NULL UNIQUE, configuration jsonb NOT NULL
+ configuration jsonb NOT NULL UNIQUE
 );
 CREATE TABLE chunk_set (
  episode_id integer REFERENCES transcript, strategy_id integer REFERENCES chunk_strategy,
- source_sha256 text NOT NULL, artifact_sha256 text NOT NULL,
  chunk_count integer NOT NULL CHECK(chunk_count >= 0), PRIMARY KEY(episode_id, strategy_id)
 );
 CREATE TABLE semantic_chunk (
@@ -46,12 +45,11 @@ CREATE TABLE semantic_chunk (
 );
 CREATE TABLE embedding_model (
  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
- configuration_sha256 text NOT NULL UNIQUE, configuration jsonb NOT NULL,
+ configuration jsonb NOT NULL UNIQUE,
  CHECK((configuration->>'dimensions')::integer = 256)
 );
 CREATE TABLE embedding_set (
  episode_id integer, strategy_id integer, model_id integer REFERENCES embedding_model,
- source_sha256 text NOT NULL, artifact_sha256 text NOT NULL,
  chunk_count integer NOT NULL CHECK(chunk_count >= 0),
  PRIMARY KEY(episode_id, strategy_id, model_id),
  FOREIGN KEY(episode_id, strategy_id) REFERENCES chunk_set
@@ -65,8 +63,8 @@ CREATE TABLE chunk_embedding (
  CHECK(abs(vector_norm(embedding)-1) < 0.0001)
 );
 CREATE TABLE import_run (
- embedding_manifest_sha256 text PRIMARY KEY,
- chunk_manifest_sha256 text NOT NULL, download_manifest_sha256 text NOT NULL,
+ embedding_run text PRIMARY KEY,
+ chunk_run text NOT NULL, download_run text NOT NULL,
  show text NOT NULL, strategy_id integer NOT NULL REFERENCES chunk_strategy,
  model_id integer NOT NULL REFERENCES embedding_model,
  catalogue_episode_count integer NOT NULL, transcript_count integer NOT NULL,

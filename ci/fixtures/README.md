@@ -10,11 +10,8 @@ transcript endpoints were checked on 22 October 2026 and returned nonempty,
 valid transcripts. Titles and publication timestamps provide human-readable
 context; the episode IDs define membership.
 
-Each entry records the observed segment count and transcript SHA256. Checksums
-use the download job's existing `write_transcript_json` serialization followed
-by a newline. They identify the exact artifact bytes, including formatting.
-A deliberately changed serialization requires updating these fingerprints after
-review; missing/changed source data must not silently select replacement episodes.
+Each entry records the observed segment count. Missing episodes or changed
+segment counts fail the integration run rather than selecting replacements.
 The fixture contains no transcript text, model weights or credentials. Raw
 transcripts downloaded while checking the selection remain in the Git-ignored
 `data/download-pilot/integration-selection/` directory.

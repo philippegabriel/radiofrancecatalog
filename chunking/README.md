@@ -36,7 +36,7 @@ airflow-54780c00bddcd71b9cfda15f79f19dbf10b6510eea64136ac55f927e60db3d0f
 ```
 
 Do not include `data/download-pilot/` or `/manifest.json`. Select a run whose
-download verification succeeded. Airflow validates all listed transcript checksums
+download verification succeeded. Airflow validates all listed transcript files
 before launching the chunk container:
 
 ```text
@@ -46,13 +46,13 @@ prepare_chunking -> chunk -> verify_chunks
 The final task log gives the output location:
 
 ```text
-data/chunk-pilot/airflow-<chunk-DAG-run-hash>/
+data/chunk-pilot/airflow-<run-id>/
   <episode-id>.csv
   manifest.json
 ```
 
-The download and chunk DAGs have different run hashes. The chunk manifest records
-the selected download directory and its manifest checksum to connect the two.
+The download and chunk DAGs have different run names. The chunk manifest records
+the selected download directory and its run name to connect the two.
 
 ## Strategy and format
 
@@ -68,8 +68,8 @@ The headerless CSV format remains:
 episode_id,chunk_no,start_seq,end_seq,start_time,end_time,text
 ```
 
-The manifest records strategy parameters, a checksum of the processing source
-files, input transcript hashes, output CSV hashes, and episode/chunk counts. It
+The manifest records strategy parameters, the source run name, file paths,
+and episode/chunk counts. It
 does not silently overwrite a previous strategy's output. Future strategies will
 use separate runs and explicit version identities; no generic strategy framework
 is introduced here.

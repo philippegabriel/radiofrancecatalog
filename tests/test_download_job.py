@@ -1,7 +1,6 @@
 """Offline checks for the download pilot's publication and retry boundaries."""
 
 import csv
-import hashlib
 import json
 import os
 import stat
@@ -25,12 +24,11 @@ def episode(episode_id: str, timestamp: int) -> EpisodeRow:
 
 
 class DownloadJobTests(unittest.TestCase):
-    def test_fixed_selection_enforces_membership_and_fingerprints(self) -> None:
+    def test_fixed_selection_enforces_membership_and_counts(self) -> None:
         """Select exact IDs, reject unavailable/changed sources and never publish partial output."""
         from radiofrance.libs.episode_selection import EpisodeSelection, read_selection
         identity = '11111111-1111-4111-8111-111111111111_5'
         transcript: Transcript = {'transcript': [{'start': 0, 'end': 1, 'text': 'Français'}]}
-        encoded = (json.dumps(transcript, ensure_ascii=False, indent=2) + '\n').encode()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             baseline = root / 'baseline.csv'
@@ -38,7 +36,7 @@ class DownloadJobTests(unittest.TestCase):
                 csv.writer(stream).writerow(FIELDS)
             selection: EpisodeSelection = {'version': 1, 'show': 'affaires-sensibles', 'episodes': [{
                 'episode_id': identity, 'published_ts': 200, 'published_iso': '', 'title': 'Test',
-                'transcript_sha256': hashlib.sha256(encoded).hexdigest(), 'segment_count': 1}]}
+                 'segment_count': 1}]}
             fixture = root / 'selection.json'
             fixture.write_text(json.dumps(selection))
             with patch.object(job, 'fetch_all', return_value=iter([episode('unselected_5', 300), episode(identity, 200)])) as fetch, patch.object(job, 'fetch_transcript', return_value=transcript):
@@ -117,7 +115,7 @@ class DownloadJobTests(unittest.TestCase):
             self.assertEqual(run.call_args.args[3], 'file-key')
 
     def test_success_empty_and_failed_transcript(self) -> None:
-        """Verify cutoff, merging, checksums, no-update behavior and all-or-nothing publication."""
+        """Verify cutoff, merging, counts, no-update behavior and all-or-nothing publication."""
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             baseline = root / 'baseline.csv'
@@ -133,7 +131,6 @@ class DownloadJobTests(unittest.TestCase):
             published = root / 'success'
             self.assertEqual(json.loads((published / 'manifest.json').read_text()), manifest)
             source = published / manifest['transcripts'][0]['path']
-            self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), manifest['transcripts'][0]['sha256'])
             with self.assertRaises(FileExistsError):
                 job.run_download('affaires-sensibles', baseline, published, 'test')
             with patch.object(job, 'fetch_all', return_value=iter([])), patch.object(job, 'fetch_transcript') as transcript:

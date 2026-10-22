@@ -9,7 +9,6 @@ services, model files, database tables or pipeline dependencies are modified.
 
 import argparse
 import csv
-import hashlib
 import importlib
 import json
 import math
@@ -81,7 +80,6 @@ class SentenceDetails(TypedDict):
 class LlamaDetails(TypedDict):
     command: list[str]
     total_document_tokens: int
-    model_sha256: str
 
 
 type Details = SentenceDetails | LlamaDetails
@@ -308,8 +306,7 @@ def llama(model_name: str) -> None:
                 result: Result = {'runtime': f'llama-{model_name}', 'dimensions': DIMENSIONS, 'process_startup_seconds': startup,
                     'model_load_seconds': startup, 'peak_sampled_rss_mib': monitor.peak,
                     'idle_loaded_rss_mib': idle, 'measurements': measurements, 'vectors': vectors,
-                    'query_vectors': query_vectors, 'details': {'command': command, 'total_document_tokens': token_count,
-                    'model_sha256': hashlib.file_digest(path.open('rb'), 'sha256').hexdigest()}}
+                    'query_vectors': query_vectors, 'details': {'command': command, 'total_document_tokens': token_count}}
                 save(f'llama-{model_name}.json', result)
         finally:
             process.terminate()
@@ -337,7 +334,6 @@ def prepare(chunk_dir: Path | None, sample_count: int) -> None:
         path = manifest_path.parent / item['path']
         if not path.resolve().is_relative_to(manifest_path.parent.resolve()):
             raise ValueError('Chunk path escapes source directory')
-        assert hashlib.file_digest(path.open('rb'), 'sha256').hexdigest() == item['sha256']
         before = len(samples)
         with path.open() as stream:
             for index, row in enumerate(csv.reader(stream)):
@@ -352,7 +348,6 @@ def prepare(chunk_dir: Path | None, sample_count: int) -> None:
         'Quelle place occupent les réseaux sociaux dans une enquête journalistique ?',
         'Comment protéger les sources et les lanceurs d’alerte ?']])
     save('environment.json', {'source_manifest': str(manifest_path.relative_to(ROOT)),
-        'source_manifest_sha256': hashlib.file_digest(manifest_path.open('rb'), 'sha256').hexdigest(),
         'threads': THREADS, 'repeats': REPEATS, 'batch_sizes': BATCH_SIZES,
         'sample_count': len(selected), 'episode_count': len(manifest['chunks']),
         'llama_version': subprocess.check_output([str(BIN), '--version'], stderr=subprocess.STDOUT, text=True),

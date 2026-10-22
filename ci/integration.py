@@ -155,7 +155,7 @@ def run_pipeline(run_id: str, evidence: Path, timeout_seconds: int = 5400) -> No
     summary: IntegrationSummary = {'pipeline_run_id': run_id, 'show': SHOW, 'episode_count': len(selection['episodes']),
         'episode_ids': [e['episode_id'] for e in selection['episodes']], 'status': 'verified'}
     (evidence / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
-    print('Verified all ten fixed episode IDs, transcript fingerprints and nonempty 256D embeddings')
+    print('Verified all ten fixed episode IDs, transcript counts and nonempty 256D embeddings')
 
 
 def main() -> None:

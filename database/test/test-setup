@@ -42,6 +42,7 @@ if PGUSER=radiofrance PGPASSWORD="$RF_DATABASE_PASSWORD" psql -X -d airflow -c '
   echo 'Application login unexpectedly connected to Airflow.' >&2
   exit 1
 fi
+[[ "$(psql -XAt -d radiofrance -c "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND column_name LIKE '%sha256%'")" = 0 ]]
 echo 'Passed: first-start SQL, restart persistence, application login, vector(256), restricted role and Airflow access denied.'
 if [[ "${RF_VALIDATE_LOADER:-0}" = 1 ]]; then
   cd "$database_dir/.."

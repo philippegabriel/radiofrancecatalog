@@ -1,8 +1,9 @@
 """Run the download-to-database pilot by coordinating the existing stage DAGs."""
 
 from datetime import timedelta
-import hashlib
 from typing import Literal, TypedDict
+
+from radiofrance.libs.runs import run_folder
 
 from airflow.sdk import DAG, task
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
@@ -31,9 +32,8 @@ class StageConf(TypedDict, total=False):
 
 def run_reference(parent_run_id: str, stage: Stage) -> StageRun:
     """Name a child run and its artifact folder using the stage jobs' run-ID convention."""
-    token = hashlib.sha256(parent_run_id.encode()).hexdigest()
-    child_run_id = f'pipeline__{token}__{stage}'
-    return {'run_id': child_run_id, 'folder': 'airflow-' + hashlib.sha256(child_run_id.encode()).hexdigest()}
+    child_run_id = f'pipeline__{parent_run_id}__{stage}'
+    return {'run_id': child_run_id, 'folder': run_folder(child_run_id)}
 
 
 def stage_operator(stage: Stage, configuration: StageConf | None = None) -> TriggerDagRunOperator:

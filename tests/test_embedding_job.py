@@ -8,7 +8,7 @@ import stat
 import tempfile
 import unittest
 
-from radiofrance.jobs.chunk import ChunkManifest, sha256
+from radiofrance.jobs.chunk import ChunkManifest
 import radiofrance.jobs.embedding as job
 class FakeEncoder:
     """Deterministic vectors for testing publication without an ML installation."""
@@ -33,11 +33,11 @@ class EmbeddingJobTests(unittest.TestCase):
                 ['episode_5', 1, 2, 3, 1.0, 2.0, 'Une autre phrase'],
             ])
         manifest: ChunkManifest = {'version': 1, 'stage': 'chunking', 'show': 'mecaniques-du-journalisme',
-            'source_run': 'download-run', 'source_manifest_sha256': 'a' * 64,
-            'strategy': {'name': 'segment-characters', 'version': 1, 'target_size': 1000, 'min_size': 300, 'code_sha256': 'b' * 64},
+            'source_run': 'download-run',
+            'strategy': {'name': 'segment-characters', 'version': 1, 'target_size': 1000, 'min_size': 300},
             'episode_count': 1, 'chunk_count': 0 if empty else 2,
-            'chunks': [{'episode_id': 'episode_5', 'path': path.name, 'sha256': sha256(path),
-                        'source_sha256': 'c' * 64, 'chunk_count': 0 if empty else 2}]}
+            'chunks': [{'episode_id': 'episode_5', 'path': path.name,
+                         'chunk_count': 0 if empty else 2}]}
         job.write_json(root / 'manifest.json', manifest)
         return root / 'manifest.json'
 
@@ -50,7 +50,7 @@ class EmbeddingJobTests(unittest.TestCase):
         blobs.mkdir()
         content = blobs / 'temporary'
         content.write_text('fixture')
-        blob = blobs / sha256(content)
+        blob = blobs / 'model-fixture'
         content.rename(blob)
         for name in ['model.safetensors', 'config.json', 'tokenizer.json', 'modules.json', 'chat_template.jinja']:
             (snapshot / name).symlink_to(Path('../../blobs') / blob.name)
@@ -73,16 +73,14 @@ class EmbeddingJobTests(unittest.TestCase):
             self.assertEqual(result['chunk_count'], 2)
             self.assertEqual(result['configuration']['precision'], 'float32')
             self.assertEqual(result['configuration']['dimensions'], 256)
-            self.assertEqual(result['source_manifest_sha256'], sha256(source))
-            self.assertEqual(result['configuration']['model_manifest_sha256'], job.model_digest(job.verify_model(model)))
             self.assertEqual(source.read_bytes(), before)
             self.assertEqual(stat.S_IMODE((root / 'output').stat().st_mode), 0o755)
             self.assertEqual(stat.S_IMODE((root / 'output/episode_5.jsonl').stat().st_mode), 0o644)
             with self.assertRaises(FileExistsError):
                 job.run_embedding(source, root / 'output', model, encoder=FakeEncoder())
 
-    def test_atomic_failure_empty_input_and_corrupt_model(self) -> None:
-        """Bad vectors/source/model leave no published or staged output; empty runs succeed."""
+    def test_atomic_failure_empty_input_and_missing_model(self) -> None:
+        """Bad vectors or missing model files leave no published or staged output; empty runs succeed."""
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = self.source(root / 'chunks')
@@ -94,13 +92,13 @@ class EmbeddingJobTests(unittest.TestCase):
             empty = self.source(root / 'empty', empty=True)
             result = job.run_embedding(empty, root / 'empty-output', model)
             self.assertEqual(result['chunk_count'], 0)
-            (job.cached_snapshot(model) / 'config.json').write_text('corrupt')
-            with self.assertRaisesRegex(ValueError, '[Cc]orrupt'):
+            (job.cached_snapshot(model) / 'config.json').unlink()
+            with self.assertRaisesRegex(ValueError, 'incomplete'):
                 job.run_embedding(source, root / 'failed', model, encoder=FakeEncoder())
             self.assertFalse((root / 'failed').exists())
 
     def test_verifier_rejects_forged_vectors_paths_and_lineage(self) -> None:
-        """Even updated file checksums cannot conceal malformed vectors or changed source identity."""
+        """Reject malformed vectors, escaping paths and wrong source runs."""
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = self.source(root / 'chunks')
@@ -111,7 +109,6 @@ class EmbeddingJobTests(unittest.TestCase):
             records = [json.loads(line) for line in path.read_text().splitlines()]
             records[0]['embedding'] = [1.0]
             path.write_text(''.join(json.dumps(record) + '\n' for record in records))
-            result['embeddings'][0]['sha256'] = sha256(path)
             job.write_json(output / 'manifest.json', result)
             with self.assertRaisesRegex(ValueError, '256 finite'):
                 job.verify_output(output, source)
@@ -126,28 +123,23 @@ class EmbeddingJobTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'does not match'):
                 job.verify_output(output2, source)
 
-    def test_cache_links_missing_revision_and_inventory_integrity(self) -> None:
-        """Accept HF blob links, reject escaping links/missing revisions, and verify saved inventory."""
+    def test_missing_model_files_and_revision(self) -> None:
+        """Accept local cache links and require the pinned revision and necessary model files."""
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             with self.assertRaisesRegex(ValueError, 'hf download'):
                 job.verify_model(root / 'absent')
             model = self.model(root / 'hub')
-            self.assertEqual(job.verify_model(model)['revision'], job.MODEL_REVISION)
+            job.verify_model(model)
             source = self.source(root / 'chunks')
             output = root / 'output'
             job.run_embedding(source, output, model, encoder=FakeEncoder())
-            self.assertFalse((model / 'model-manifest.json').exists())
-            self.assertTrue((output / 'model-manifest.json').is_file())
-            (output / 'model-manifest.json').write_text('{}')
-            with self.assertRaisesRegex(ValueError, 'inventory'):
-                job.verify_output(output, source)
             outside = root / 'outside'
             outside.write_text('fixture')
             path = job.cached_snapshot(model) / 'config.json'
             path.unlink()
-            path.symlink_to(outside)
-            with self.assertRaisesRegex(ValueError, 'escapes'):
+            path.symlink_to(root / 'missing-file')
+            with self.assertRaisesRegex(ValueError, 'incomplete'):
                 job.verify_model(model)
 
     def test_shared_hub_blobs(self) -> None:
@@ -160,7 +152,7 @@ class EmbeddingJobTests(unittest.TestCase):
             shared.parent.mkdir(parents=True)
             blob.rename(shared)
             blob.symlink_to(Path('../../blobs/aa') / shared.name)
-            self.assertEqual(job.verify_model(cache)['revision'], job.MODEL_REVISION)
+            job.verify_model(cache)
 
 
 if __name__ == '__main__':

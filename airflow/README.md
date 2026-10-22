@@ -15,7 +15,7 @@ UI access, fixed `.env` login credentials, persistence and troubleshooting.
 
 Trigger `radiofrance_pipeline` for a complete run with automatic handoffs. Stage
 DAGs also remain manually runnable by selecting the completed upstream run explicitly.
-Download, chunking and embedding jobs publish checksummed manifests and immutable
+Download, chunking and embedding jobs publish simple manifests and immutable
 output directories.
 
 The [database loader DAG](../database/README.md#airflow-loading--increment-3) runs

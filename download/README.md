@@ -31,7 +31,7 @@ OUTPUT/
   updates.csv                  # only newly fetched episodes
   SHOW.csv                     # merged cumulative catalogue
   transcripts/EPISODE_ID.json   # raw JSON for each new episode
-  manifest.json                # show, cutoff, counts, paths and SHA256 hashes
+  manifest.json                # show, cutoff, counts, paths
 ```
 
 No database, S3 or Airflow services are contacted by the command. The catalogue
@@ -99,7 +99,7 @@ venv/airflow/bin/pyright
 ```
 
 The offline test covers cutoff selection, merging, transcript UUID conversion,
-artifact hashes, empty updates, destination protection and failure cleanup.
+artifact paths, empty updates, destination protection and failure cleanup.
 A live acquisition requires an API key and makes real requests; it is not part
 of offline validation.
 

@@ -1,5 +1,4 @@
 """Check snapshot isolation, integrity guards, and atomic pointer publication."""
-import hashlib
 import json
 import os
 import subprocess
@@ -20,7 +19,7 @@ class SnapshotTests(unittest.TestCase):
             prefix = 'data/airflow/github-download/v2/airflow-3.3.2/postgres-17'
             record = snapshot.Snapshot(format_version=1, airflow_version='3.3.2', postgres_major='17',
                                        key=prefix + '/snapshots/1.dump',
-                                       sha256=hashlib.sha256(b'abc').hexdigest(), bytes=3)
+                                       bytes=3)
             def download(*args: str) -> None:
                 Path(args[3]).write_bytes(json.dumps(record).encode() if args[2].endswith('.json') else b'abc')
             with patch.dict(os.environ, {'RF_SNAPSHOT_SCOPE': 'v2', 'RF_S3_BUCKET': 'test', 'PG_CONTAINER': 'test'}), patch.object(sys, 'argv', ['snapshot.py', 'restore', str(dump)]), patch.object(snapshot, 'version', return_value='3.3.2'), patch.object(snapshot, 'postgres_major', return_value='17'), patch.object(snapshot, 'aws', side_effect=download), patch.object(snapshot, 'report'), patch.object(snapshot.subprocess, 'run') as restore:
@@ -32,7 +31,7 @@ class SnapshotTests(unittest.TestCase):
 
     def test_rejects_wrong_version_and_namespace(self) -> None:
         record = snapshot.Snapshot(format_version=1, airflow_version='3.3.2', postgres_major='17',
-                                   key='prefix/snapshots/1.dump', sha256='hash', bytes=10)
+                                   key='prefix/snapshots/1.dump', bytes=10)
         snapshot.validate(record, 'prefix', '3.3.2', '17')
         with self.assertRaises(ValueError):
             snapshot.validate(record, 'prefix', '3.4.0', '17')
@@ -44,11 +43,11 @@ class SnapshotTests(unittest.TestCase):
             dump = Path(directory) / 'metadata.dump'
             prefix = 'data/airflow/github-download/v2/airflow-3.3.2/postgres-17'
             record = snapshot.Snapshot(format_version=1, airflow_version='3.3.2', postgres_major='17',
-                                       key=prefix + '/snapshots/1.dump', sha256='wrong', bytes=3)
+                                       key=prefix + '/snapshots/1.dump', bytes=4)
             def download(*args: str) -> None:
                 Path(args[3]).write_bytes(json.dumps(record).encode() if args[2].endswith('.json') else b'abc')
             with patch.dict(os.environ, {'RF_SNAPSHOT_SCOPE': 'v2', 'RF_S3_BUCKET': 'test', 'PG_CONTAINER': 'test'}), patch.object(sys, 'argv', ['snapshot.py', 'restore', str(dump)]), patch.object(snapshot, 'version', return_value='3.3.2'), patch.object(snapshot, 'postgres_major', return_value='17'), patch.object(snapshot, 'aws', side_effect=download), patch.object(snapshot.subprocess, 'run') as restore:
-                with self.assertRaisesRegex(ValueError, 'checksum'):
+                with self.assertRaisesRegex(ValueError, 'size'):
                     snapshot.main()
                 restore.assert_not_called()
 
@@ -61,7 +60,6 @@ class SnapshotTests(unittest.TestCase):
                 destinations.append(args[3])
                 if args[3].endswith('current.json'):
                     record = json.loads(Path(args[2]).read_text())
-                    self.assertEqual(record['sha256'], hashlib.sha256(b'abc').hexdigest())
                     raise subprocess.CalledProcessError(1, 'aws')
             with patch.dict(os.environ, {'RF_SNAPSHOT_SCOPE': 'v2', 'RF_S3_BUCKET': 'test', 'GITHUB_RUN_ID': '1', 'GITHUB_RUN_ATTEMPT': '1'}), patch.object(sys, 'argv', ['snapshot.py', 'save', str(dump)]), patch.object(snapshot, 'version', return_value='3.3.2'), patch.object(snapshot, 'postgres_major', return_value='17'), patch.object(snapshot, 'aws', side_effect=upload):
                 with self.assertRaises(subprocess.CalledProcessError):
