@@ -21,7 +21,7 @@ vectors and temporary transcript/catalogue fixtures; they need no Radio France
 API key, Hugging Face token, model download or existing artifact directories.
 The optional representative-pilot test is skipped because generated pilot data
 is not committed. Model inference and the complete live pipeline belong to the
-separate manual integration workflow described below.
+separate integration workflow described below.
 
 The analysis job installs CPU PyTorch and the existing embedding requirements
 in `venv/radiofrance`, separately from `venv/airflow`. This matches the fallback
@@ -72,10 +72,11 @@ not reproduced by the local test run.
 
 ## Full pipeline integration
 
-[Pipeline integration](../.github/workflows/pipeline-integration.yml) is manually
-triggered from GitHub Actions. Select the branch containing the implementation
-and choose **Run workflow**. GitHub requires a workflow with `workflow_dispatch`
-to exist on the default branch before offering this button.
+[Pipeline integration](../.github/workflows/pipeline-integration.yml) runs on every
+push to `codex/containerised-download-pilot` while we validate the implementation.
+Pushes to other branches do not trigger it. A manual trigger is also configured:
+select a branch and choose **Run workflow** once the workflow exists on the default
+branch, as required by GitHub for the manual button.
 
 Configure two repository Actions secrets:
 
@@ -113,4 +114,4 @@ volumes and temporary credential files. Each retry starts with a new database.
 Local checks exercise fixed-selection success/failure and the real SQL verifier
 against ten synthetic transcripts with deterministic vectors, including rejection
 of a missing embedding. They do not establish hosted model throughput or prove
-the full Docker run; observe the first manually triggered GitHub run for that.
+the full Docker run; observe the first GitHub run for that.
