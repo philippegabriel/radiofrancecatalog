@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent / 'dags'))
 import radiofrance_embedding as dag_module
-import test_embedding_job as fixtures
-from embedding_job import run_embedding
+from tests import test_embedding_job as fixtures
+from radiofrance.jobs.embedding import run_embedding
 
 
 class LocalEmbeddingTests(unittest.TestCase):

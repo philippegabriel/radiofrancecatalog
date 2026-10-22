@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / 'dags'))
-from radiofrance_catalogue.catalogue import FIELDS, cutoff, merge, catalogue_session, CatalogueRow
+from radiofrance.libs.catalogue import FIELDS, cutoff, merge, catalogue_session, CatalogueRow
 
 class CatalogueTests(unittest.TestCase):
     def test_cutoff_merge_and_validation(self) -> None:

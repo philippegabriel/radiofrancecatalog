@@ -10,6 +10,9 @@ RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu 
     torch==2.14.0+cpu torchvision==0.29.1+cpu
 COPY embedding/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt && pip check
-COPY embedding_job.py chunk_job.py /app/
+COPY pyproject.toml /app/
+COPY src /app/src
+COPY database/sql /app/database/sql
+RUN pip install --no-cache-dir --no-deps .
 USER 10001:10001
-ENTRYPOINT ["python", "/app/embedding_job.py"]
+ENTRYPOINT ["python", "-m", "radiofrance.jobs.embedding"]

@@ -14,7 +14,7 @@ import argparse, csv, os, sys, time, json, re
 from datetime import datetime, timezone
 from collections.abc import Iterable
 from typing import cast
-from radiofrance_types import FictionRow, GraphQLData, GraphQLVariables, RadioFranceNode, Timestamp
+from radiofrance.libs.types import FictionRow, GraphQLData, GraphQLVariables, RadioFranceNode, Timestamp
 
 import requests
 from requests.adapters import HTTPAdapter

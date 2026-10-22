@@ -13,7 +13,7 @@ from airflow.sdk.definitions.param import ParamsDict
 from airflow.providers.docker.operators.docker import DockerOperator
 from docker.types import Mount
 
-from chunk_job import sha256, validate_source, verify_output
+from radiofrance.jobs.chunk import sha256, validate_source, verify_output
 
 
 class ChunkRun(TypedDict):

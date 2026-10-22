@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "radiofrance"
+version = "0.1.0"
+description = "Radio France catalogue and transcript processing pipeline"
+requires-python = ">=3.14"
+# Dependencies are installed separately for each processing stage.
+dependencies = []
+
+[tool.setuptools]
+packages = ["radiofrance", "radiofrance.jobs", "radiofrance.libs", "radiofrance.sql", "radiofrance.sql.catalogue"]
+
+[tool.setuptools.package-dir]
+radiofrance = "src/radiofrance"
+"radiofrance.sql" = "database/sql"
+
+[tool.setuptools.package-data]
+"radiofrance.sql" = ["*.sql"]
+"radiofrance.sql.catalogue" = ["*.sql"]

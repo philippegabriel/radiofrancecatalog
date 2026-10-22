@@ -13,7 +13,7 @@ import re
 import tempfile
 from typing import Protocol, TypedDict, cast
 
-from chunk_job import ChunkManifest, contained_file, sha256, verify_output as verify_chunks
+from radiofrance.jobs.chunk import ChunkManifest, contained_file, sha256, verify_output as verify_chunks
 
 MODEL_ID = 'google/embeddinggemma-2'
 MODEL_REVISION = '914f7f89142e33e77833254d9c9b90c3cef7303b'

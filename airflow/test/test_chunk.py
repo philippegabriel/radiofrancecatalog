@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent / 'dags'))
 import radiofrance_chunk as dag_module
-from chunk_job import DownloadManifest, run_chunking
+from radiofrance.jobs.chunk import DownloadManifest, run_chunking
 
 
 class LocalChunkTests(unittest.TestCase):

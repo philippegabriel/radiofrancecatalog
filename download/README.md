@@ -55,7 +55,7 @@ if it is stored in the project's existing `.OpenAPIKey` file:
 
 ```bash
 export RADIOFRANCE_API_KEY="$(cat .OpenAPIKey)"
-venv/airflow/bin/python download_job.py \
+venv/airflow/bin/python -m radiofrance.jobs.download \
   --show mecaniques-du-journalisme \
   --baseline data/mecaniques-du-journalisme.csv \
   --output-dir data/download-pilot/run-001
@@ -93,7 +93,7 @@ The Python base image still uses a tag: pin the tested digest before deployment.
 ## Validation and next steps
 
 ```bash
-venv/airflow/bin/python -m unittest test_download_job -v
+venv/airflow/bin/python -m unittest tests.test_download_job -v
 venv/airflow/bin/python -m unittest discover -s airflow/test -p test_download.py -v
 venv/airflow/bin/pyright
 ```

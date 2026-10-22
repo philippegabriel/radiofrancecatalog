@@ -1,4 +1,4 @@
-.PHONY: all dump test login resetdb clean reallyclean tr chunks embeddings uploadembeds dumpids query
+.PHONY: all dump test login resetdb clean reallyclean tr chunks uploadembeds dumpids query
 KEY=$(file < .OpenAPIKey)
 FC_URL := https://www.radiofrance.fr/franceculture/podcasts
 FI_URL := https://www.radiofrance.fr/franceinter/podcasts
@@ -43,16 +43,16 @@ $(CACHEDDBS): data/%.db: data/%.csv schema.sql importcatalogue.sql
 	touch $@
 
 %.cutOffDate: data/%.db
-	$(PSQL) --tuples-only -v show=$* -f cutoffdate.sql -o $@
+	$(PSQL) --tuples-only -v show=$* -f database/sql/catalogue/cutoffdate.sql -o $@
 
 %.db: %.rf.csv data/%.db importcatalogue.sql
 	$(PSQL) -f importcatalogue.sql < $<
 	touch $@
 
-%.csv: emitcsv.sql %.db
+%.csv: database/sql/catalogue/emitcsv.sql %.db
 	$(PSQL) --csv -v show="$*" -o $@ -f $<
 
-%.html.csv: emithtml.sql %.db
+%.html.csv: database/sql/catalogue/emithtml.sql %.db
 	$(PSQL) --csv -v show="$*" -o $@ -f $<
 
 login:
@@ -61,12 +61,12 @@ login:
 $(addsuffix .rf.csv,$(FIPODCASTS)): %.rf.csv: %.cutOffDate
 	$(eval since := $(shell cat  $<))
 	@echo fetching $@ since $(since) ...
-	python rf_dump.py --api-key $(KEY) --since $(since) --show-url $(FI_URL)/$(@:.rf.csv=) --out $@
+	python -m radiofrance.fetch_episodes --api-key $(KEY) --since $(since) --show-url $(FI_URL)/$(@:.rf.csv=) --out $@
 
 $(addsuffix .rf.csv,$(FCPODCASTS)): %.rf.csv: %.cutOffDate
 	$(eval since := $(shell cat $<))
 	@echo fetching $@ since $(since) ...
-	python rf_dump.py --api-key $(KEY) --since $(since) --show-url $(FC_URL)/$(@:.rf.csv=) --out $@
+	python -m radiofrance.fetch_episodes --api-key $(KEY) --since $(since) --show-url $(FC_URL)/$(@:.rf.csv=) --out $@
 
 %.html: %.html.csv
 	echo '<link rel="stylesheet" href="index.css">' > $@
@@ -79,18 +79,15 @@ data/transcripts/%.db: transcripts/%.json inserttranscript.sql schema.sql
 	RF_TRANSCRIPT_JSON="$<" $(PSQL) -v episode_id=$* -f inserttranscript.sql
 	@touch $@
 
-data/chunks/%.csv: transcripts/%.json chunk_json_to_csv.py transcript_json.py radiofrance_types.py
+data/chunks/%.csv: transcripts/%.json src/radiofrance/chunk_json_to_csv.py src/radiofrance/libs/transcript_json.py src/radiofrance/libs/types.py
 	@mkdir -p $(dir $@)
-	$(PYTHON) chunk_json_to_csv.py $< > $@
+	$(PYTHON) -m radiofrance.chunk_json_to_csv $< > $@
 
 data/chunks/%.db: data/chunks/%.csv insertchunks.sql data/transcripts/%.db
 	cat $< | $(PSQL) \
 	    -v episode_id=$* \
 	    -f insertchunks.sql
 	@touch $@
-
-embeddings: $(CHUNKCSVS)
-	python chunk_to_embeddings.py --hftoken .hftoken --output-dir data/embeddings $^
 
 data/embeddings/%.db: data/embeddings/%.csv insertembeddings.sql data/chunks/%.db
 	cat $< | $(PSQL) \

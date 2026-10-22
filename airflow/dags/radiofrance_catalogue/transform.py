@@ -54,7 +54,7 @@ def make_chunk_file(source: Path, target: Path) -> None:
     """Run the existing chunker and atomically write its unchanged CSV format."""
     temporary = target.with_suffix('.csv.tmp')
     with temporary.open('w', encoding='utf-8', newline='') as output:
-        subprocess.run([sys.executable, str(PROJECT / 'chunk_json_to_csv.py'), str(source)],
+        subprocess.run([sys.executable, '-m', 'radiofrance.chunk_json_to_csv', str(source)],
                        stdout=output, check=True, cwd=PROJECT)
     temporary.replace(target)
 

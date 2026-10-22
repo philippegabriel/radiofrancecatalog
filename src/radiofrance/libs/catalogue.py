@@ -1,5 +1,6 @@
 import csv
 import os
+from importlib.resources import files
 from contextlib import contextmanager
 import psycopg2
 from pathlib import Path
@@ -45,7 +46,7 @@ def read_rows(path: str | Path, show: str) -> list[CatalogueRow]:
     return rows
 
 
-PROJECT = Path(__file__).resolve().parents[3]
+SQL = files('radiofrance.sql.catalogue')
 
 
 @contextmanager
@@ -58,7 +59,7 @@ def catalogue_session(path: str | Path, show: str) -> Iterator[PostgreSQLCursor]
         with connection.cursor() as cursor:
             cursor.execute("SET LOCAL search_path TO pg_temp")
             cursor.execute("SET LOCAL TIME ZONE 'UTC'")
-            cursor.execute((PROJECT / 'catalogue_csv_schema.sql').read_text())
+            cursor.execute(SQL.joinpath('catalogue_csv_schema.sql').read_text())
             from io import StringIO
             buffer = StringIO()
             writer = csv.DictWriter(buffer, fieldnames=FIELDS)
@@ -73,7 +74,7 @@ def catalogue_session(path: str | Path, show: str) -> Iterator[PostgreSQLCursor]
 
 
 def query_catalogue(path: str | Path, show: str, sql_file: str) -> tuple[list[str], list[tuple[SQLValue, ...]]]:
-    query = (PROJECT / sql_file).read_text().replace(":'show'", '%s')
+    query = SQL.joinpath(sql_file).read_text().replace(":'show'", '%s')
     with catalogue_session(path, show) as cursor:
         cursor.execute(query, (show,))
         assert cursor.description is not None

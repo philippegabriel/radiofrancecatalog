@@ -4,8 +4,8 @@ import csv
 import sys
 from pathlib import Path
 from typing import TextIO
-from radiofrance_types import Chunk, TranscriptSegment
-from transcript_json import read_segments
+from radiofrance.libs.types import Chunk, TranscriptSegment
+from radiofrance.libs.transcript_json import read_segments
 
 
 TARGET_SIZE = 1000

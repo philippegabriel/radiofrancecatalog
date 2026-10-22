@@ -16,12 +16,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import psycopg2
 
-from chunk_job import run_chunking, sha256
-import database_job as job
-from embedding_job import run_embedding, write_json
-import test_embedding_job as fixtures
-from radiofrance_catalogue.catalogue import FIELDS
-from radiofrance_types import Transcript
+from radiofrance.jobs.chunk import run_chunking, sha256
+import radiofrance.jobs.database as job
+from radiofrance.jobs.embedding import run_embedding, write_json
+from tests import test_embedding_job as fixtures
+from radiofrance.libs.catalogue import FIELDS
+from radiofrance.libs.types import Transcript
 
 
 @unittest.skipUnless('RF_TEST_DATABASE_DSN' in os.environ, 'requires an explicit disposable database; use bash database/test/test-loader')
@@ -78,9 +78,9 @@ class DatabaseJobTests(unittest.TestCase):
     def test_ten_episode_integration_assertions(self) -> None:
         """Run the artifact chain with fake inference, then exercise CI's real SQL assertions."""
         import hashlib
-        import download_job
-        from episode_selection import read_selection
-        from test_download_job import episode
+        import radiofrance.jobs.download as download_job
+        from radiofrance.libs.episode_selection import read_selection
+        from tests.test_download_job import episode
         project = Path(__file__).resolve().parents[2]
         selection = read_selection(project / 'ci/fixtures/le-cours-de-l-histoire.json', 'le-cours-de-l-histoire')
         transcript: Transcript = {'transcript': [{'start': 0.0, 'end': 1.0, 'text': 'Texte français.'}]}

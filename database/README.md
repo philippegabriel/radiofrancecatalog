@@ -177,7 +177,7 @@ than `radiofrance`. There is no migration registry in this initial implementatio
 Future schema evolution will need an explicit update procedure; changing init SQL
 does not modify an existing volume. Connections use standard `PG*` settings, with
 optional `RF_DATABASE_DSN` for native execution; credentials are not command arguments.
-For example, native commands use `venv/airflow/bin/python database_job.py` with
+For example, native commands use `venv/airflow/bin/python -m radiofrance.jobs.database` with
 the same flags and host connection settings (`PGHOST=127.0.0.1`, `PGPORT=55432`).
 
 ### Inspect the imported data

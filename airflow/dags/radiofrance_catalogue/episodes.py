@@ -3,7 +3,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Protocol, TypedDict
 from airflow.sdk import Asset, AssetAlias
-from radiofrance_catalogue.catalogue import SHOWS, CatalogueRow
+from radiofrance.libs.catalogue import SHOWS, CatalogueRow
 
 EPISODES: dict[str, AssetAlias] = {show: AssetAlias(f'radiofrance-episodes-{show}') for show in SHOWS}
 

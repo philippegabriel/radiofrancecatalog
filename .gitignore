@@ -31,3 +31,8 @@ __pycache__/
 /data/transcripts/
 /data/benchmarks/
 /data/database-backups/
+
+# Python package build products
+/build/
+/dist/
+*.egg-info/

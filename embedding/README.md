@@ -100,7 +100,7 @@ Existing custom model directories are left untouched.
 ## Checks
 
 ```bash
-venv/airflow/bin/python -m unittest test_embedding_job airflow/test/test_embedding.py
+venv/airflow/bin/python -m unittest tests.test_embedding_job airflow/test/test_embedding.py
 venv/airflow/bin/pyright
 ```
 

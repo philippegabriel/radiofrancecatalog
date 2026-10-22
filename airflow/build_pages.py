@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / 'dags'))
-from radiofrance_catalogue.catalogue import SHOWS, query_catalogue
+from radiofrance.libs.catalogue import SHOWS, query_catalogue
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from csv2html import render_csv
 

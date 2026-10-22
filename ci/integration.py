@@ -16,7 +16,7 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from episode_selection import read_selection
+from radiofrance.libs.episode_selection import read_selection
 
 FIXTURE = ROOT / 'ci/fixtures/le-cours-de-l-histoire.json'
 SHOW = 'le-cours-de-l-histoire'

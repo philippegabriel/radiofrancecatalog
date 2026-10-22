@@ -8,10 +8,8 @@ import stat
 import tempfile
 import unittest
 
-from chunk_job import ChunkManifest, sha256
-import embedding_job as job
-
-
+from radiofrance.jobs.chunk import ChunkManifest, sha256
+import radiofrance.jobs.embedding as job
 class FakeEncoder:
     """Deterministic vectors for testing publication without an ML installation."""
 

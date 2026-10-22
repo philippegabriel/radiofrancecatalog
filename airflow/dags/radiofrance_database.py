@@ -13,8 +13,8 @@ from airflow.providers.docker.operators.docker import DockerOperator
 from docker.types import Mount
 from psycopg2.extensions import make_dsn
 
-from database_job import Prepared, prepare, verify_database as verify_import
-from chunk_job import contained_file
+from radiofrance.jobs.database import Prepared, prepare, verify_database as verify_import
+from radiofrance.jobs.chunk import contained_file
 
 
 class DatabaseRun(TypedDict):

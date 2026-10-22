@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 from collections.abc import Iterable, Iterator
 from typing import TextIO, cast
-from radiofrance_types import EpisodeRow, GraphQLData, GraphQLVariables, Timestamp
+from radiofrance.libs.types import EpisodeRow, GraphQLData, GraphQLVariables, Timestamp
 
 import requests
 from requests.adapters import HTTPAdapter

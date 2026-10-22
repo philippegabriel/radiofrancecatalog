@@ -13,8 +13,8 @@ from airflow.sdk.definitions.param import ParamsDict
 from airflow.providers.docker.operators.docker import DockerOperator
 from docker.types import Mount
 
-from chunk_job import sha256
-from embedding_job import validate_input, verify_output
+from radiofrance.jobs.chunk import sha256
+from radiofrance.jobs.embedding import validate_input, verify_output
 
 
 class EmbeddingRun(TypedDict):

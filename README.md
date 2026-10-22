@@ -7,8 +7,7 @@
 * https://www.radiofrance.fr/franceculture/podcasts/les-pieds-sur-terre
 * https://www.radiofrance.fr/franceculture/podcasts/le-cours-de-l-histoire
 * https://www.radiofrance.fr/franceculture/podcasts/mecaniques-du-journalisme
-## Worflow
-![code workflow](docs/workflow.svg)
+## Workflow
 
 Start the [Airflow Compose setup](airflow/DEPLOYMENT.md) to run Airflow
 and its persistent metadata database, then trigger the smoke-test DAG.
@@ -20,9 +19,6 @@ See the [deployment architecture](docs/deployment-architecture.md) and the
 
 The application schema is defined in [20-application-schema.sql](database/init/20-application-schema.sql).
 See the [database guide](database/README.md) for initialization and loading.
-
-An episode-partitioned [Dagster pilot](docs/dagster.md) orchestrates existing
-transcripts, chunks, embeddings and PostgreSQL imports without relying on file timestamps.
 
 The [EmbeddingGemma 2 stage](embedding/README.md) consumes a completed chunk
 manifest and produces normalized 256D vectors with SentenceTransformers FP32.

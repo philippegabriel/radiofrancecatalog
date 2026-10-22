@@ -10,9 +10,7 @@ import sys
 import tempfile
 import unittest
 
-import chunk_job as job
-
-
+import radiofrance.jobs.chunk as job
 class ChunkJobTests(unittest.TestCase):
     def source(self, root: Path, empty: bool = False) -> Path:
         """Create a valid local download manifest and transcript test fixture."""
@@ -50,7 +48,7 @@ class ChunkJobTests(unittest.TestCase):
             self.assertEqual(manifest['strategy']['target_size'], 1000)
             self.assertEqual(manifest['strategy']['min_size'], 300)
             self.assertEqual(len(manifest['strategy']['code_sha256']), 64)
-            expected = subprocess.check_output([sys.executable, 'chunk_json_to_csv.py', str(source.parent / 'episode_5.json')])
+            expected = subprocess.check_output([sys.executable, '-m', 'radiofrance.chunk_json_to_csv', str(source.parent / 'episode_5.json')])
             output = root / 'chunks/episode_5.csv'
             self.assertEqual(output.read_bytes(), expected)
             with output.open() as stream:

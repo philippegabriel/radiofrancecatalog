@@ -10,11 +10,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import download_job as job
-import fetchtranscript
-import rf_dump
-from radiofrance_catalogue.catalogue import FIELDS
-from radiofrance_types import EpisodeRow, Transcript
+import radiofrance.jobs.download as job
+import radiofrance.fetch_transcripts as fetchtranscript
+import radiofrance.fetch_episodes as rf_dump
+from radiofrance.libs.catalogue import FIELDS
+from radiofrance.libs.types import EpisodeRow, Transcript
 
 
 def episode(episode_id: str, timestamp: int) -> EpisodeRow:
@@ -27,7 +27,7 @@ def episode(episode_id: str, timestamp: int) -> EpisodeRow:
 class DownloadJobTests(unittest.TestCase):
     def test_fixed_selection_enforces_membership_and_fingerprints(self) -> None:
         """Select exact IDs, reject unavailable/changed sources and never publish partial output."""
-        from episode_selection import EpisodeSelection, read_selection
+        from radiofrance.libs.episode_selection import EpisodeSelection, read_selection
         identity = '11111111-1111-4111-8111-111111111111_5'
         transcript: Transcript = {'transcript': [{'start': 0, 'end': 1, 'text': 'Français'}]}
         encoded = (json.dumps(transcript, ensure_ascii=False, indent=2) + '\n').encode()
@@ -63,7 +63,7 @@ class DownloadJobTests(unittest.TestCase):
             root = Path(temporary)
             output = root / 'catalogue.csv'
             rows = [episode('c_5', 200), episode('b_5', 100), episode('a_5', 100)]
-            arguments = ['rf_dump.py', '--api-key', 'test', '--out', str(output)]
+            arguments = ['fetch_episodes.py', '--api-key', 'test', '--out', str(output)]
             with patch('sys.argv', arguments), patch.object(rf_dump, 'fetch_all', return_value=iter(rows)), patch('builtins.print'):
                 self.assertEqual(rf_dump.main(), 0)
             with output.open(newline='') as stream:
@@ -73,7 +73,7 @@ class DownloadJobTests(unittest.TestCase):
             ids = root / 'ids.txt'
             ids.write_text('episode_5\n')
             transcript: Transcript = {'transcript': [{'start': 0, 'end': 1, 'text': 'Français'}]}
-            arguments = ['fetchtranscript.py', str(ids), '--output-dir', str(root / 'transcripts'), '--delay', '0']
+            arguments = ['fetch_transcripts.py', str(ids), '--output-dir', str(root / 'transcripts'), '--delay', '0']
             with patch('sys.argv', arguments), patch.object(fetchtranscript, 'fetch_transcript', return_value=transcript) as fetch, patch('builtins.print'):
                 fetchtranscript.main()
             fetch.assert_called_once_with('episode')
@@ -110,7 +110,7 @@ class DownloadJobTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             key = Path(temporary) / 'key'
             key.write_text('file-key')
-            arguments = ['download_job.py', '--show', 'mecaniques-du-journalisme',
+            arguments = ['radiofrance.jobs.download', '--show', 'mecaniques-du-journalisme',
                          '--baseline', 'baseline.csv', '--output-dir', 'output', '--api-key-file', str(key)]
             with patch('sys.argv', arguments), patch.dict(os.environ, {'RADIOFRANCE_API_KEY': 'environment-key'}), patch.object(job, 'run_download', return_value={}) as run, patch('builtins.print'):
                 job.main()

@@ -128,14 +128,14 @@ def run_chunking(source_manifest: Path, output: Path) -> ChunkManifest:
     are never overwritten; failures remove staging and leave no final directory.
     """
     # Airflow imports the verification helpers without needing the chunker installed.
-    from chunk_json_to_csv import MIN_SIZE, TARGET_SIZE, transcript_to_csv
+    from radiofrance.chunk_json_to_csv import MIN_SIZE, TARGET_SIZE, transcript_to_csv
 
     if output.exists():
         raise FileExistsError(f'Use a fresh output directory: {output}')
     source = validate_source(source_manifest)
-    root = Path(__file__).resolve().parent
+    root = Path(__file__).resolve().parent.parent
     code = hashlib.sha256()
-    for filename in ('chunk_json_to_csv.py', 'transcript_json.py', 'radiofrance_types.py', 'chunk_job.py'):
+    for filename in ('chunk_json_to_csv.py', 'libs/transcript_json.py', 'libs/types.py', 'jobs/chunk.py'):
         code.update(filename.encode())
         code.update((root / filename).read_bytes())
     strategy: ChunkStrategy = {'name': 'segment-characters', 'version': 1,

@@ -114,3 +114,24 @@ Local checks exercise fixed-selection success/failure and the real SQL verifier
 against ten synthetic transcripts with deterministic vectors, including rejection
 of a missing embedding. They do not establish hosted model throughput or prove
 the full Docker run; observe the first GitHub run for that.
+
+## Shared Python package
+
+Processing code lives in `src/radiofrance`. Callable commands remain at package
+level or under `jobs/`; shared modules without a `main()` live in `libs/`
+(`catalogue`, `types`, `episode_selection`, `transcript_json`).
+From the repository root, install it
+into a development environment with `venv/airflow/bin/python -m pip install -e .`.
+Stage-specific dependencies remain in their existing requirements files; package
+installation alone does not install Airflow, PyTorch or model libraries. CI's
+requirements install this package in editable mode. Containers install a regular
+copy, including the SQL resources maintained in `database/sql`. Catalogue CSV/export
+queries are kept in its `catalogue/` subdirectory and packaged as well.
+
+The job entry points are `python -m radiofrance.jobs.download`, `.chunk`,
+`.embedding` and `.database` (use the full module name for each). The standalone
+fetch commands are `python -m radiofrance.fetch_episodes` and
+`python -m radiofrance.fetch_transcripts`. Their arguments are unchanged.
+
+After source changes, rebuild the affected processing images and the Airflow image;
+Compose no longer mounts individual processing modules into Airflow.

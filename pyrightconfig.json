@@ -1,9 +1,11 @@
 {
   "include": [
+    "src",
     "*.py",
     "airflow",
     "database/test",
-    "ci"
+    "ci",
+    "tests"
   ],
   "exclude": [
     "venv",
@@ -16,6 +18,7 @@
   "venvPath": "venv",
   "venv": "airflow",
   "extraPaths": [
+    "src",
     "airflow/dags",
     "venv/radiofrance/lib/python3.14/site-packages"
   ]

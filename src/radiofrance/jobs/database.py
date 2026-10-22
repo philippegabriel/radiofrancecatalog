@@ -15,15 +15,16 @@ import psycopg2
 from psycopg2 import sql
 from psycopg2.extensions import cursor as Cursor
 
-from chunk_job import ChunkManifest, DownloadManifest, contained_file, sha256, validate_source, verify_output as verify_chunks
-from embedding_job import EmbeddingManifest, EmbeddingRow, verify_output as verify_embeddings
-from radiofrance_types import TranscriptSegment
-from transcript_json import read_segments
+from radiofrance.jobs.chunk import ChunkManifest, DownloadManifest, contained_file, sha256, validate_source, verify_output as verify_chunks
+from radiofrance.jobs.embedding import EmbeddingManifest, EmbeddingRow, verify_output as verify_embeddings
+from radiofrance.libs.types import TranscriptSegment
+from radiofrance.libs.transcript_json import read_segments
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / 'airflow/dags'))
-from radiofrance_catalogue.catalogue import CatalogueRow, read_rows
+from radiofrance.libs.catalogue import CatalogueRow, read_rows
 
-ROOT = Path(__file__).resolve().parent / 'database'
+from importlib.resources import files
+
+SQL = files('radiofrance.sql')
 
 
 class Artifact(TypedDict):
@@ -73,7 +74,7 @@ def canonical(value: object) -> str:
 
 def execute(cursor: Cursor, name: str, parameters: tuple[object, ...] = ()) -> None:
     """Execute parameterized SQL from the checked-in loader query directory."""
-    cursor.execute((ROOT / 'sql' / f'{name}.sql').read_text(), parameters)
+    cursor.execute(SQL.joinpath(f'{name}.sql').read_text(), parameters)
 
 
 def source_run(root: Path, name: str) -> Path:
@@ -163,7 +164,7 @@ def verify_files(prepared: Prepared) -> None:
 def register(cursor: Cursor, table: str, configuration: object) -> int:
     """Reuse an exact configuration or register it under its canonical SHA256."""
     content = canonical(configuration)
-    query = sql.SQL((ROOT / 'sql/configuration.sql').read_text()).format(table=sql.Identifier(table))
+    query = sql.SQL(SQL.joinpath('configuration.sql').read_text()).format(table=sql.Identifier(table))
     cursor.execute(query, (hashlib.sha256(content.encode()).hexdigest(), content))
     row = cursor.fetchone()
     assert row is not None

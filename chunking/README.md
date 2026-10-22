@@ -1,12 +1,12 @@
 # chunking stage
 
 This stage takes one completed download manifest, reuses the existing
-`chunk_json_to_csv.py` logic, and publishes chunk CSVs plus a manifest. It needs
+`radiofrance.chunk_json_to_csv` logic, and publishes chunk CSVs plus a manifest. It needs
 no API key, model, network connection or database. The download workflow remains
 unchanged; we trigger chunking separately while learning the pipeline.
 
-`chunk_json_to_csv.py` owns both the chunking algorithm and CSV conversion through
-`transcript_to_csv()`. Its existing CLI and `chunk_job.py` call that same function.
+`radiofrance.chunk_json_to_csv` owns both the chunking algorithm and CSV conversion through
+`transcript_to_csv()`. Its existing CLI and `radiofrance.jobs.chunk` call that same function.
 The job wrapper handles manifest validation, provenance and atomic publication.
 
 ## 1. Build and update Compose
@@ -19,14 +19,12 @@ sudo docker build -f chunking/Dockerfile -t radiofrance-chunk:pilot .
 sudo docker compose up -d --wait --wait-timeout 300
 ```
 
-Compose adds a read-only chunk-output mount and a read-only copy of
-`chunk_job.py` at `/opt/radiofrance/lib/chunk_job.py` for Airflow's validation
-helpers, with that directory on `PYTHONPATH`. The helper is mounted separately
-from the read-only DAG directory so Docker can create its mount point.
-It reuses the Docker provider,
-socket access and host UID/GID configured for the download DAG. No Airflow image
-rebuild is required for this stage. The separate chunk container mounts downloads
-read-only and its output parent writable; it has networking disabled.
+Compose mounts chunk outputs read-only for Airflow's validation tasks. Shared
+validation helpers come from the installed `radiofrance` package, so rebuild the
+Airflow image after processing-code changes (`sudo docker compose build airflow`).
+The chunk container reuses the Docker socket access and host UID/GID configured
+for downloads. It mounts downloads read-only and its output parent writable;
+networking is disabled.
 
 ## 2. Select a completed download run
 
@@ -97,11 +95,11 @@ problem. No embeddings or database loads occur in this stage.
 The same processing command can run outside Docker:
 
 ```bash
-venv/airflow/bin/python chunk_job.py \
+venv/airflow/bin/python -m radiofrance.jobs.chunk \
   --download-manifest data/download-pilot/airflow-DOWNLOAD_HASH/manifest.json \
   --output-dir data/chunk-pilot/native-run-001
 
-venv/airflow/bin/python -m unittest test_chunk_job -v
+venv/airflow/bin/python -m unittest tests.test_chunk_job -v
 venv/airflow/bin/python -m unittest discover -s airflow/test -p test_chunk.py -v
 venv/airflow/bin/pyright
 ```

@@ -63,7 +63,7 @@ SQL
 "${psql_cmd[@]}" -At -F '|' -v queryvector="$vector" -f query.sql > "$work/search.txt"
 [[ $(cut -d '|' -f 9 "$work/search.txt") == 'hello world' ]]
 [[ $(cut -d '|' -f 1 "$work/search.txt") == "$episode" ]]
-"${psql_cmd[@]}" --csv -v show=affaires-sensibles -f emitcsv.sql > "$work/export.csv"
+"${psql_cmd[@]}" --csv -v show=affaires-sensibles -f database/sql/catalogue/emitcsv.sql > "$work/export.csv"
 "${psql_cmd[@]}" -f importcatalogue.sql < "$work/export.csv"
 # Call the database function without Python: shape/type validation is server-side.
 for document in 'null' '{}' '{"transcript":null}' '{"transcript":[{"start":true,"end":1,"text":"bad"}]}' '{"transcript":[{"start":0,"end":1,"text":"bad","speaker":42}]}'; do

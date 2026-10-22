@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from collections.abc import Iterator
 from typing import TextIO, cast
-from radiofrance_types import Transcript
+from radiofrance.libs.types import Transcript
 
 import requests
 

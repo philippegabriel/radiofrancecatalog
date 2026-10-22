@@ -45,7 +45,8 @@ services:
   airflow:
     image: radiofrance-airflow:dev
     build:
-      context: ./airflow
+      context: .
+      dockerfile: airflow/Dockerfile
     command: [python, /opt/airflow-bootstrap/ui_auth.py]
     depends_on:
       postgres:
@@ -73,7 +74,6 @@ services:
       RF_DATABASE_HOST: postgres
       RF_DATABASE_PORT: "5432"
       RF_DATABASE_PASSWORD: ${RF_DATABASE_PASSWORD:-radiofrance-dev}
-      PYTHONPATH: /opt/radiofrance/lib
     group_add:
       - "${RF_DOCKER_GID:-0}"
     ports:
@@ -86,12 +86,6 @@ services:
       - ./data/download-pilot:/opt/radiofrance/output:ro
       - ./data/chunk-pilot:/opt/radiofrance/chunks:ro
       - ./data/embedding-pilot:/opt/radiofrance/embeddings:ro
-      - ./embedding_job.py:/opt/radiofrance/lib/embedding_job.py:ro
-      - ./chunk_job.py:/opt/radiofrance/lib/chunk_job.py:ro
-      - ./database_job.py:/opt/radiofrance/lib/database_job.py:ro
-      - ./transcript_json.py:/opt/radiofrance/lib/transcript_json.py:ro
-      - ./radiofrance_types.py:/opt/radiofrance/lib/radiofrance_types.py:ro
-      - ./database/sql:/opt/radiofrance/lib/database/sql:ro
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test:

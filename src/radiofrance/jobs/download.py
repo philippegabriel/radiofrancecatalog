@@ -10,12 +10,11 @@ import sys
 import tempfile
 import time
 from typing import TypedDict
-from episode_selection import read_selection
+from radiofrance.libs.episode_selection import read_selection
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / 'airflow/dags'))
-from radiofrance_catalogue.catalogue import SHOWS, merge, read_rows
-from fetchtranscript import aod_uuid, fetch_transcript, write_transcript_json
-from rf_dump import fetch_all, write_catalogue_csv
+from radiofrance.libs.catalogue import SHOWS, merge, read_rows
+from radiofrance.fetch_transcripts import aod_uuid, fetch_transcript, write_transcript_json
+from radiofrance.fetch_episodes import fetch_all, write_catalogue_csv
 
 
 class Artifact(TypedDict):

@@ -2,3 +2,6 @@
 -r ../airflow/requirements.txt
 -r ../download/requirements.txt
 pyright==1.1.414
+
+# Install shared code without pulling model libraries into Airflow.
+-e .

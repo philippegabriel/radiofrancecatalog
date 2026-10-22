@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from typing import cast
 
-from radiofrance_types import TranscriptSegment
+from radiofrance.libs.types import TranscriptSegment
 
 
 def read_segments(path: Path) -> list[TranscriptSegment]:
