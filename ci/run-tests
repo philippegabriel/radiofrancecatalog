@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Run maintained job tests, then database and Airflow tests in a disposable cluster.
+set -euo pipefail
+project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$project_root"
+venv/airflow/bin/python -m unittest test_download_job test_chunk_job test_embedding_job
+bash database/test/test-loader

@@ -31,8 +31,9 @@ pipeline DAG passes exact upstream run references between these stages.
 Compose mounts `airflow/dags/` read-only at `/opt/airflow/dags/`.
 
 The older S3 download/transform/registration DAGs, their tests and GitHub workflows
-have been removed. GitHub pipeline validation will be added around the current
-containerized implementation later. Existing native launcher/snapshot utilities
+have been removed. [Code validation](../ci/README.md) now checks the current
+implementation on pushes and pull requests; live pipeline CI is planned separately.
+Existing native launcher/snapshot utilities
 are retained; they are not used by this Compose deployment.
 
 ## Checks

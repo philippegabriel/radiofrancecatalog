@@ -36,3 +36,7 @@ and checks the committed results; see [Airflow loading](database/README.md#airfl
 
 Trigger `radiofrance_pipeline` to run download → chunk → embedding → database
 with automatic, explicit artifact handoffs. See [running the complete pipeline](airflow/DEPLOYMENT.md#run-the-complete-pipeline).
+
+[Code validation](ci/README.md) runs Pyright, DAG/configuration checks and the
+maintained test suites on every push and pull request. The complete live pipeline
+integration workflow is the next CI increment.

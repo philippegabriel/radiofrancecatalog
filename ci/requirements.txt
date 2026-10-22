@@ -1,0 +1,4 @@
+# Shared validation environment; no model runtime needed by the test job.
+-r ../airflow/requirements.txt
+-r ../download/requirements.txt
+pyright==1.1.414

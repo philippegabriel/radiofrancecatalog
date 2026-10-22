@@ -2,7 +2,8 @@
   "include": [
     "*.py",
     "airflow",
-    "database/test"
+    "database/test",
+    "ci"
   ],
   "exclude": [
     "venv",

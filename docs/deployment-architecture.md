@@ -41,6 +41,8 @@ assets are not needed for the target design.
    and verifies the committed results. `radiofrance_pipeline` now coordinates
    download → chunk → embedding → database with explicit run references.
 5. Demonstrate safe retries, restart persistence and recovery after a failure.
+6. Run [code validation](../ci/README.md) on pushes and pull requests. Full
+   containerized pipeline integration in GitHub Actions remains a separate step.
 
 The [download pilot](../download/README.md) already supports files and
 container execution. Its manifest records artifact paths and checksums. Keep that
