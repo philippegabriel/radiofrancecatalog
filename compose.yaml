@@ -64,6 +64,8 @@ services:
       AIRFLOW__API__HOST: 0.0.0.0
       AIRFLOW__API__PORT: "8080"
       RF_PROJECT_ROOT: ${RF_PROJECT_ROOT:-}
+      RF_SHOW: ${RF_SHOW:-mecaniques-du-journalisme}
+      RF_EPISODE_SELECTION: ${RF_EPISODE_SELECTION:-}
       RF_HF_HUB_CACHE: ${RF_HF_HUB_CACHE:-}
       RF_UID: ${RF_UID:-1000}
       RF_GID: ${RF_GID:-1000}
@@ -80,7 +82,7 @@ services:
       - airflow-home:/opt/airflow
       # Current containerized pipeline DAGs and their shared helpers.
       - ./airflow/dags:/opt/airflow/dags:ro
-      - ./data/mecaniques-du-journalisme.csv:/opt/radiofrance/input/baseline.csv:ro
+      - ./data/${RF_SHOW:-mecaniques-du-journalisme}.csv:/opt/radiofrance/input/baseline.csv:ro
       - ./data/download-pilot:/opt/radiofrance/output:ro
       - ./data/chunk-pilot:/opt/radiofrance/chunks:ro
       - ./data/embedding-pilot:/opt/radiofrance/embeddings:ro

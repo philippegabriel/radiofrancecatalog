@@ -4,6 +4,8 @@ import csv
 import json
 import os
 import sys
+import subprocess
+import shutil
 from pathlib import Path
 import tempfile
 import unittest
@@ -19,6 +21,7 @@ import database_job as job
 from embedding_job import run_embedding, write_json
 import test_embedding_job as fixtures
 from radiofrance_catalogue.catalogue import FIELDS
+from radiofrance_types import Transcript
 
 
 @unittest.skipUnless('RF_TEST_DATABASE_DSN' in os.environ, 'requires an explicit disposable database; use bash database/test/test-loader')
@@ -71,6 +74,56 @@ class DatabaseJobTests(unittest.TestCase):
                 return cast(tuple[int, int, int], cursor.fetchone())
         finally:
             connection.close()
+
+    def test_ten_episode_integration_assertions(self) -> None:
+        """Run the artifact chain with fake inference, then exercise CI's real SQL assertions."""
+        import hashlib
+        import download_job
+        from episode_selection import read_selection
+        from test_download_job import episode
+        project = Path(__file__).resolve().parents[2]
+        selection = read_selection(project / 'ci/fixtures/le-cours-de-l-histoire.json', 'le-cours-de-l-histoire')
+        transcript: Transcript = {'transcript': [{'start': 0.0, 'end': 1.0, 'text': 'Texte français.'}]}
+        fingerprint = hashlib.sha256((json.dumps(transcript, ensure_ascii=False, indent=2) + '\n').encode()).hexdigest()
+        rows = []
+        for item in selection['episodes']:
+            item['transcript_sha256'] = fingerprint
+            item['segment_count'] = 1
+            row = episode(item['episode_id'], item['published_ts'])
+            row['show'] = selection['show']
+            row['published_iso'] = item['published_iso']
+            rows.append(row)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = root / 'baseline.csv'
+            with baseline.open('w', newline='') as stream:
+                csv.writer(stream).writerow(FIELDS)
+            chosen = root / 'selection.json'
+            chosen.write_text(json.dumps(selection))
+            download = root / 'downloads/run'
+            with patch.object(download_job, 'fetch_all', return_value=iter(rows)), patch.object(download_job, 'fetch_transcript', return_value=transcript):
+                download_job.run_download(selection['show'], baseline, download, 'test', 0, chosen)
+            run_chunking(download / 'manifest.json', root / 'chunks/run')
+            cache = root / 'cache'
+            fixtures.EmbeddingJobTests().model(cache)
+            run_embedding(root / 'chunks/run/manifest.json', root / 'embeddings', cache, encoder=fixtures.FakeEncoder())
+            job.load(job.prepare(root / 'embeddings/manifest.json', root / 'chunks', root / 'downloads'), self.dsn)
+            psql = str(Path(os.environ['PG_BINDIR']) / 'psql') if 'PG_BINDIR' in os.environ else shutil.which('psql')
+            assert psql is not None
+            arguments = [psql, self.dsn, '-v', 'ON_ERROR_STOP=1', '-v', 'fixture=' + json.dumps(selection)]
+            sql = (project / 'ci/verify-integration.sql').read_text()
+            checked = subprocess.run(arguments, input=sql, text=True, capture_output=True)
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+            connection = psycopg2.connect(self.dsn)
+            try:
+                with connection:
+                    with connection.cursor() as cursor:
+                        cursor.execute('DELETE FROM chunk_embedding WHERE episode_id=(SELECT min(episode_id) FROM chunk_embedding)')
+            finally:
+                connection.close()
+            rejected = subprocess.run(arguments, input=sql, text=True, capture_output=True)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn('episode without embeddings', rejected.stderr)
 
     def test_load_repeat_and_configuration_coexistence(self) -> None:
         """Commit a complete run, repeat without duplication and keep model variants separately."""

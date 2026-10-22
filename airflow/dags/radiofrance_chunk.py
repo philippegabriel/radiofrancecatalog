@@ -32,7 +32,7 @@ with DAG(
     description='Chunk transcripts from a selected download manifest and verify the results.',
     doc_md="""
 ## Purpose and flow
-Process one completed `mecaniques-du-journalisme` download run. `prepare_chunking`
+Process one completed download run for RF_SHOW (default mecaniques-du-journalisme). `prepare_chunking`
 validates its transcript list and checksums. `chunk` runs the existing character
 chunker in a separate, network-disabled container. `verify_chunks` checks the
 output manifest, row counts, checksums and source-manifest provenance.
@@ -76,8 +76,8 @@ can be cleared and retried without rerunning the chunk container.
             raise ValueError('Create data/chunk-pilot and recreate Compose before running')
         path = DOWNLOADS / name / 'manifest.json'
         source = validate_source(path)
-        if source['show'] != 'mecaniques-du-journalisme':
-            raise ValueError('This pilot requires a mecaniques-du-journalisme download')
+        if source['show'] != os.environ.get('RF_SHOW', 'mecaniques-du-journalisme'):
+            raise ValueError('Download show does not match configured RF_SHOW')
         return {'download_run': name, 'output_folder': 'airflow-' + hashlib.sha256(run_id.encode()).hexdigest(),
                 'source_sha256': sha256(path)}
 

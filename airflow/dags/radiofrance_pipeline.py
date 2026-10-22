@@ -56,7 +56,7 @@ def stage_operator(stage: Stage, configuration: StageConf | None = None) -> Trig
 
 with DAG(
     dag_id='radiofrance_pipeline',
-    description='Run the mecaniques-du-journalisme pilot from download through verified database loading.',
+    description='Run the configured show from download through verified database loading.',
     doc_md="""
 ## Purpose and flow
 One manually triggered pipeline run coordinates the existing radiofrance_download,
@@ -75,8 +75,9 @@ model cache, baseline, application database and host mounts are unchanged. Enabl
 this DAG AND all four child DAGs in the UI, then trigger radiofrance_pipeline
 without parameters. A running scheduler and triggerer are required. Deferrable
 waits release worker slots so child tasks can run with the current parallelism.
-This remains the mecaniques-du-journalisme pilot; it does not generalize show
-selection or change the fixed baseline CSV.
+RF_SHOW selects the show (default mecaniques-du-journalisme). Optional
+RF_EPISODE_SELECTION enables a fixed integration sample with an empty baseline;
+normal runs retain their existing baseline behavior. No baseline is overwritten.
 
 ## Outputs and recovery
 Artifacts remain in the normal download-pilot, chunk-pilot and embedding-pilot

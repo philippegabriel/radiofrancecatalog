@@ -1,0 +1,69 @@
+name: Pipeline integration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pipeline-integration-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AIRFLOW_UI_PASSWORD: integration-only-password
+  RF_CI_EVIDENCE: /tmp/radiofrance-integration-evidence
+
+jobs:
+  pipeline:
+    name: Ten episodes through Airflow
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+      - name: Prepare disposable configuration
+        env:
+          RADIOFRANCE_API_KEY: ${{ secrets.OPENAPIKEY }}
+        run: python ci/integration.py prepare
+      - name: Download pinned model to Hugging Face cache
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          test -n "$HF_TOKEN" || { echo 'Repository secret HF_TOKEN is required'; exit 1; }
+          python -m pip install huggingface-hub==1.33.0
+          hf download google/embeddinggemma-2 --revision 914f7f89142e33e77833254d9c9b90c3cef7303b
+      - name: Build job and Airflow images
+        run: |
+          docker build -f download/Dockerfile -t radiofrance-download:pilot .
+          docker build -f chunking/Dockerfile -t radiofrance-chunk:pilot .
+          docker build -f embedding/Dockerfile -t radiofrance-embedding:pilot .
+          docker compose build airflow database-loader
+      - name: Start PostgreSQL and Airflow
+        run: docker compose up -d --wait --wait-timeout 600
+      - name: Run full pipeline and verify database
+        run: python ci/integration.py run --run-id "integration__${GITHUB_RUN_ID}__${GITHUB_RUN_ATTEMPT}" --evidence "$RF_CI_EVIDENCE"
+      - name: Collect diagnostics
+        if: always()
+        run: |
+          mkdir -p "$RF_CI_EVIDENCE"
+          docker compose logs --no-color > "$RF_CI_EVIDENCE/compose.log" 2>&1 || true
+          docker compose cp airflow:/opt/airflow/logs "$RF_CI_EVIDENCE/task-logs" > "$RF_CI_EVIDENCE/log-copy.log" 2>&1 || true
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pipeline-integration-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/radiofrance-integration-evidence/
+          retention-days: 7
+      - name: Remove disposable containers and credentials
+        if: always()
+        run: |
+          docker compose down --volumes --remove-orphans
+          rm -f .env .OpenAPIKey

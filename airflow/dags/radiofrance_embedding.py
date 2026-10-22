@@ -45,6 +45,7 @@ Follow embedding/README.md: build radiofrance-embedding:pilot, prepare the pinne
 Google snapshot with hf download in the standard Hugging Face cache, create
  data/embedding-pilot, and recreate Compose. The host Docker socket and UID/GID
 settings are shared with the download/chunk stages. Trigger this DAG manually
+for RF_SHOW (default mecaniques-du-journalisme), using the same deployment setting.
 with `chunk_run`, the basename of a completed data/chunk-pilot/airflow-<hash> run.
 RF_HF_HUB_CACHE in .env gives the absolute host Hub cache path. No API key or Airflow model dependencies are required. The processing container
 has no network, and input/model mounts are read-only. Only the host hf download command needs internet access. The container rejects missing
@@ -80,8 +81,8 @@ package versions, code checksum, model checksum and chunk-source checksums.
             raise ValueError('Create data/embedding-pilot and recreate Compose')
         source_path = CHUNKS / name / 'manifest.json'
         source = validate_input(source_path)
-        if source['show'] != 'mecaniques-du-journalisme':
-            raise ValueError('This pilot requires mecaniques-du-journalisme chunks')
+        if source['show'] != os.environ.get('RF_SHOW', 'mecaniques-du-journalisme'):
+            raise ValueError('Chunk show does not match configured RF_SHOW')
         if not CACHE_HOST or not Path(CACHE_HOST).is_absolute():
             raise ValueError('Set RF_HF_HUB_CACHE in .env to the absolute host Hugging Face hub cache path')
         return {'chunk_run': name, 'output_folder': 'airflow-' + hashlib.sha256(run_id.encode()).hexdigest(),

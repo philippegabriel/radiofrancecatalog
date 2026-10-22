@@ -25,7 +25,8 @@ class Manifest(TypedDict):
     transcripts: list[Artifact]
 
 
-SHOW = 'mecaniques-du-journalisme'
+SHOW = os.environ.get('RF_SHOW', 'mecaniques-du-journalisme')
+SELECTION = os.environ.get('RF_EPISODE_SELECTION', '')
 OUTPUT = Path('/opt/radiofrance/output')
 HOST = os.environ.get('RF_PROJECT_ROOT') or '/not-configured'
 
@@ -51,7 +52,7 @@ with DAG(
     description='Run the pilot download container and verify its completed output.',
     doc_md="""
 ## Purpose and execution flow
-Manually download new `mecaniques-du-journalisme` episodes and their transcripts.
+Download catalogue episodes and transcripts for RF_SHOW (default mecaniques-du-journalisme).
 `prepare_download` checks configuration and chooses a run-specific folder.
 `download` launches the existing image using the host Docker daemon, then
 `verify_download` checks the completed manifest and artifact checksums.
@@ -62,6 +63,9 @@ and rebuild/restart Compose as described in airflow/DEPLOYMENT.md. Host paths
 and UID/GID come from .env; .OpenAPIKey is mounted read-only into the child
 container. The Airflow container needs the host Docker socket's group permission.
 No API secret is stored in Airflow variables, logs or XCom.
+RF_EPISODE_SELECTION optionally names a project-relative JSON fixture. With an
+empty baseline, download only its fixed IDs and require their transcript hashes
+and counts to match. An absent/changed selected episode fails without replacement.
 
 ## Running and outputs
 Enable this DAG in the UI and trigger it manually. It uses the existing
@@ -86,6 +90,8 @@ will fail rather than overwrite its existing output.
         """
         if not os.environ.get('RF_PROJECT_ROOT') or not Path(HOST).is_absolute():
             raise ValueError('Run bash airflow/configure and recreate the Airflow container')
+        if SELECTION and (Path(SELECTION).is_absolute() or '..' in Path(SELECTION).parts):
+            raise ValueError('RF_EPISODE_SELECTION must be a project-relative fixture path')
         if not Path('/opt/radiofrance/input/baseline.csv').is_file() or not OUTPUT.is_dir():
             raise ValueError('Pilot baseline or output mount is missing')
         return 'airflow-' + hashlib.sha256(run_id.encode()).hexdigest()
@@ -109,11 +115,13 @@ will fail rather than overwrite its existing output.
         api_version='auto',
         command=['--show', SHOW, '--baseline', '/input/baseline.csv',
                  '--output-dir', "/output/{{ ti.xcom_pull(task_ids='prepare_download') }}",
-                 '--api-key-file', '/run/secrets/radiofrance-api-key'],
+                 '--api-key-file', '/run/secrets/radiofrance-api-key',
+                 *(['--episode-selection', '/input/episode-selection.json'] if SELECTION else [])],
         mounts=[
             Mount('/input/baseline.csv', f'{HOST}/data/{SHOW}.csv', type='bind', read_only=True),
             Mount('/output', f'{HOST}/data/download-pilot', type='bind'),
             Mount('/run/secrets/radiofrance-api-key', f'{HOST}/.OpenAPIKey', type='bind', read_only=True),
+            *([Mount('/input/episode-selection.json', f'{HOST}/{SELECTION}', type='bind', read_only=True)] if SELECTION else []),
         ],
         user=f"{os.environ.get('RF_UID', '1000')}:{os.environ.get('RF_GID', '1000')}",
         mount_tmp_dir=False,

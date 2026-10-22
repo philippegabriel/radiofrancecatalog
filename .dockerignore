@@ -1,6 +1,7 @@
 # Explicit allowlist: do not send credentials or data to the Docker daemon.
 **
 !download_job.py
+!episode_selection.py
 !chunk_job.py
 !chunk_json_to_csv.py
 !transcript_json.py

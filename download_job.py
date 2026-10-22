@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 from typing import TypedDict
+from episode_selection import read_selection
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'airflow/dags'))
 from radiofrance_catalogue.catalogue import SHOWS, merge, read_rows
@@ -45,7 +46,7 @@ def artifact(path: Path, root: Path) -> Artifact:
 
 
 def run_download(show: str, baseline: Path, output: Path, api_key: str,
-                 transcript_delay: float = 1.0) -> DownloadManifest:
+                 transcript_delay: float = 1.0, episode_selection: Path | None = None) -> DownloadManifest:
     """Fetch newer episodes, merge a catalogue, and download their raw transcripts.
 
     Read a required local baseline; its greatest publication timestamp is the
@@ -54,6 +55,8 @@ def run_download(show: str, baseline: Path, output: Path, api_key: str,
     artifacts are readable across local container users (directories 0755, files
     0644); staging remains private during acquisition. An
     unavailable transcript fails this pilot, matching the existing Download DAG.
+    Optional fixed-selection mode requires an empty baseline, retrieves metadata
+    through the same API, and rejects missing IDs or changed transcript bytes/counts.
     No S3 publication, Airflow events or database writes occur here.
     """
     if show not in SHOWS:
@@ -66,6 +69,7 @@ def run_download(show: str, baseline: Path, output: Path, api_key: str,
     if output.exists():
         raise FileExistsError(f'Use a fresh output directory: {output}')
     baseline_bytes = baseline.read_bytes()
+    selection = read_selection(episode_selection, show) if episode_selection else None
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.download-job-', dir=output.parent) as staging:
         directory = Path(staging)
@@ -74,7 +78,23 @@ def run_download(show: str, baseline: Path, output: Path, api_key: str,
         baseline_copy.write_bytes(baseline_bytes)
         baseline_rows = read_rows(baseline_copy, show)
         cutoff = max((int(row['published_ts']) for row in baseline_rows), default=0)
-        rows = fetch_all(api_key, f'https://www.radiofrance.fr/{SHOWS[show]}/podcasts/{show}', since_ts=cutoff)
+        if selection and baseline_rows:
+            raise ValueError('Fixed episode selection requires an empty baseline')
+        query_cutoff = min(e['published_ts'] for e in selection['episodes']) - 1 if selection else cutoff
+        rows = fetch_all(api_key, f'https://www.radiofrance.fr/{SHOWS[show]}/podcasts/{show}', since_ts=query_cutoff)
+        expected = {e['episode_id']: e for e in selection['episodes']} if selection else {}
+        if selection:
+            selected = []
+            found: set[str] = set()
+            for row in rows:
+                if row['id'] in expected and row['id'] not in found:
+                    selected.append(row)
+                    found.add(row['id'])
+                if found == set(expected):
+                    break
+            if found != set(expected):
+                raise ValueError(f'Selected catalogue episodes unavailable: {sorted(set(expected) - found)}')
+            rows = selected
         updates = directory / 'updates.csv'
         with updates.open('w', encoding='utf-8', newline='') as stream:
             write_catalogue_csv(rows, stream)
@@ -100,6 +120,11 @@ def run_download(show: str, baseline: Path, output: Path, api_key: str,
             with path.open('w', encoding='utf-8') as stream:
                 write_transcript_json(transcript, stream)
                 stream.write('\n')
+            if selection:
+                target = expected[episode_id]
+                if (artifact(path, directory)['sha256'] != target['transcript_sha256']
+                        or len(transcript['transcript']) != target['segment_count']):
+                    raise ValueError(f'Selected transcript changed: {episode_id}')
             transcripts.append({**artifact(path, directory), 'episode_id': episode_id})
         manifest: DownloadManifest = {
             'version': 1, 'show': show, 'cutoff_timestamp': cutoff,
@@ -127,10 +152,11 @@ def main() -> None:
     parser.add_argument('--output-dir', type=Path, required=True)
     parser.add_argument('--transcript-delay', type=float, default=1.0)
     parser.add_argument('--api-key-file', type=Path, help='Read a runtime-mounted key file instead of the environment')
+    parser.add_argument('--episode-selection', type=Path, help='Fixed episode IDs and transcript fingerprints; requires empty baseline')
     args = parser.parse_args()
     api_key = args.api_key_file.read_text(encoding='utf-8') if args.api_key_file else os.environ.get('RADIOFRANCE_API_KEY', '')
     manifest = run_download(args.show, args.baseline, args.output_dir,
-                            api_key, args.transcript_delay)
+                            api_key, args.transcript_delay, args.episode_selection)
     print(json.dumps(manifest, indent=2))
 
 

@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "show": "le-cours-de-l-histoire",
+  "episodes": [
+    {
+      "episode_id": "dcebddc6-2a81-4962-9312-a3138110afb5_5",
+      "published_ts": 1790751600,
+      "published_iso": "2026-09-30 09:00:00+02",
+      "title": "Collecter les oiseaux, une autre histoire des sciences coloniales",
+      "transcript_sha256": "5f044be8c72bc5ba662a8a3404a00d35f35054b226724d16730e03f474dab6c6",
+      "segment_count": 311
+    },
+    {
+      "episode_id": "54a6557d-73cc-4065-b3bb-12b8e0d89b8a_5",
+      "published_ts": 1790665200,
+      "published_iso": "2026-09-29 09:00:00+02",
+      "title": "Soigner les animaux, une histoire vétérinaire",
+      "transcript_sha256": "2a348f4f4d29ea4dabc402ede60fdb4c23cacc531aef94a0a8d77ffedf8ede0f",
+      "segment_count": 314
+    },
+    {
+      "episode_id": "da8f46e8-af0e-4d31-8285-ed9148a15e4a_5",
+      "published_ts": 1790578800,
+      "published_iso": "2026-09-28 09:00:00+02",
+      "title": "Domestiquer les animaux, une histoire de dominations",
+      "transcript_sha256": "8f35b504051174e3c2521b5b68b9937ebd47bc72b9e669627b767d602c74464e",
+      "segment_count": 304
+    },
+    {
+      "episode_id": "e2de3069-a2f0-4aea-b375-e73441ce615e_5",
+      "published_ts": 1790233200,
+      "published_iso": "2026-09-24 09:00:00+02",
+      "title": "Le pape et le président, se quereller et papoter",
+      "transcript_sha256": "5e4e5f567965e65be7e7d9bb48a039af9a524f42e917e44ec1f1afbe300fa139",
+      "segment_count": 330
+    },
+    {
+      "episode_id": "feb4ae66-9e55-4fcd-8c64-4acf899001ae_5",
+      "published_ts": 1790146800,
+      "published_iso": "2026-09-23 09:00:00+02",
+      "title": "Napoléon et les papes, alerte enlèvement !",
+      "transcript_sha256": "bee7c84eca37e4fabba5281e07c50efd25b578dc8b9c128b520be6fdb6f3a31b",
+      "segment_count": 299
+    },
+    {
+      "episode_id": "a6d26d12-9fa8-47fe-9681-7c9cee358f04_5",
+      "published_ts": 1790060400,
+      "published_iso": "2026-09-22 09:00:00+02",
+      "title": "François Iᵉʳ et Léon X, concordat sauce bolognaise",
+      "transcript_sha256": "bb250363cb8cc5ca588d29a13ad62e07783d4403f3d503d6be428b61f4cfa022",
+      "segment_count": 305
+    },
+    {
+      "episode_id": "b66ebb96-b6f5-46a1-876f-a390ffdc1d76_5",
+      "published_ts": 1789974000,
+      "published_iso": "2026-09-21 09:00:00+02",
+      "title": "Rome et Avignon, chacun cherche son pape",
+      "transcript_sha256": "86257746aa95f6dd88d0be449a292c244469ddfb75776486c543e8140695790e",
+      "segment_count": 286
+    },
+    {
+      "episode_id": "d75bf386-6348-4613-b1a2-b94b22f128fd_5",
+      "published_ts": 1789628400,
+      "published_iso": "2026-09-17 09:00:00+02",
+      "title": "Appel à collecte ! Des photos pour les archives",
+      "transcript_sha256": "231b368992c4647f2f452277589d6f18a343de25984d81892653575a5a8d72a3",
+      "segment_count": 334
+    },
+    {
+      "episode_id": "04bb7214-5d97-451d-a0cb-f60a09a5e38e_5",
+      "published_ts": 1789542000,
+      "published_iso": "2026-09-16 09:00:00+02",
+      "title": "Collectionner et exposer, la photographie au musée",
+      "transcript_sha256": "42478fad1d7bfe7c3a4bd104357c0d82cac05230696871b59d86b21d26bfa5a3",
+      "segment_count": 259
+    },
+    {
+      "episode_id": "e7a063ff-5982-44dd-8d84-28d5096cb45b_5",
+      "published_ts": 1789455600,
+      "published_iso": "2026-09-15 09:00:00+02",
+      "title": "Photographier le patrimoine, figé pour l’éternité",
+      "transcript_sha256": "fee4fece59fc1ac4491375f12596f9628f0dbb4321abae31a912fba4a3f5caf4",
+      "segment_count": 284
+    }
+  ]
+}

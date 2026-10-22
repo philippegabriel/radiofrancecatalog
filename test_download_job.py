@@ -25,6 +25,38 @@ def episode(episode_id: str, timestamp: int) -> EpisodeRow:
 
 
 class DownloadJobTests(unittest.TestCase):
+    def test_fixed_selection_enforces_membership_and_fingerprints(self) -> None:
+        """Select exact IDs, reject unavailable/changed sources and never publish partial output."""
+        from episode_selection import EpisodeSelection, read_selection
+        identity = '11111111-1111-4111-8111-111111111111_5'
+        transcript: Transcript = {'transcript': [{'start': 0, 'end': 1, 'text': 'Français'}]}
+        encoded = (json.dumps(transcript, ensure_ascii=False, indent=2) + '\n').encode()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = root / 'baseline.csv'
+            with baseline.open('w', newline='') as stream:
+                csv.writer(stream).writerow(FIELDS)
+            selection: EpisodeSelection = {'version': 1, 'show': 'affaires-sensibles', 'episodes': [{
+                'episode_id': identity, 'published_ts': 200, 'published_iso': '', 'title': 'Test',
+                'transcript_sha256': hashlib.sha256(encoded).hexdigest(), 'segment_count': 1}]}
+            fixture = root / 'selection.json'
+            fixture.write_text(json.dumps(selection))
+            with patch.object(job, 'fetch_all', return_value=iter([episode('unselected_5', 300), episode(identity, 200)])) as fetch, patch.object(job, 'fetch_transcript', return_value=transcript):
+                result = job.run_download('affaires-sensibles', baseline, root / 'success', 'test', 0, fixture)
+            self.assertEqual(result['catalogue_episode_count'], 1)
+            self.assertEqual(result['transcripts'][0]['episode_id'], identity)
+            self.assertEqual(fetch.call_args.kwargs['since_ts'], 199)
+            with patch.object(job, 'fetch_all', return_value=iter([])), self.assertRaisesRegex(ValueError, 'unavailable'):
+                job.run_download('affaires-sensibles', baseline, root / 'missing', 'test', 0, fixture)
+            with patch.object(job, 'fetch_all', return_value=iter([episode(identity, 200)])), patch.object(job, 'fetch_transcript', return_value={'transcript': []}), self.assertRaisesRegex(ValueError, 'changed'):
+                job.run_download('affaires-sensibles', baseline, root / 'changed', 'test', 0, fixture)
+            self.assertFalse((root / 'changed').exists())
+            self.assertFalse((root / 'missing').exists())
+            selection['episodes'].append(selection['episodes'][0])
+            fixture.write_text(json.dumps(selection))
+            with self.assertRaisesRegex(ValueError, 'duplicate'):
+                read_selection(fixture, 'affaires-sensibles')
+
     def test_original_clis_keep_sorting_columns_and_json_format(self) -> None:
         """Exercise both existing CLIs offline after sharing their serializers with the job."""
         with tempfile.TemporaryDirectory() as temporary:

@@ -21,7 +21,7 @@ vectors and temporary transcript/catalogue fixtures; they need no Radio France
 API key, Hugging Face token, model download or existing artifact directories.
 The optional representative-pilot test is skipped because generated pilot data
 is not committed. Model inference and the complete live pipeline belong to the
-separate integration workflow planned next.
+separate manual integration workflow described below.
 
 The analysis job installs CPU PyTorch and the existing embedding requirements
 in `venv/radiofrance`, separately from `venv/airflow`. This matches the fallback
@@ -69,3 +69,48 @@ The source and scripts have been validated locally, including the temporary
 database suite. The first hosted run still needs to be observed after this
 workflow is pushed; runner provisioning and cold dependency installation are
 not reproduced by the local test run.
+
+## Full pipeline integration
+
+[Pipeline integration](../.github/workflows/pipeline-integration.yml) is manually
+triggered from GitHub Actions. Select the branch containing the implementation
+and choose **Run workflow**. GitHub requires a workflow with `workflow_dispatch`
+to exist on the default branch before offering this button.
+
+Configure two repository Actions secrets:
+
+- `OPENAPIKEY`: the Radio France API key, mounted into the download container.
+- `HF_TOKEN`: a Hugging Face read token whose account can download
+  `google/embeddinggemma-2` (accept its access terms on Hugging Face first).
+
+The existing AWS secrets and `AIRFLOW_FERNET_KEY` are not used. The workflow runs
+entirely on a disposable Ubuntu runner; it does not connect to your installation.
+It creates an empty baseline and selects exactly the ten committed episode IDs
+in `fixtures/le-cours-de-l-histoire.json`. Metadata and transcripts are fetched
+live, with transcript fingerprints and segment counts checked before publication.
+A missing episode or changed transcript fails the run without substitution.
+
+It builds all five images from the selected checkout, downloads the pinned model
+with the Hugging Face CLI, starts Compose, unpauses the five pipeline DAGs and
+triggers `radiofrance_pipeline` through Airflow's API. Airflow owns the sequencing
+and runs the existing download → chunk → embedding → database stages. GitHub
+Actions provisions the environment and observes the parent DAG; it does not
+reimplement the stage orchestration. Inference uses the existing CPU FP32
+SentenceTransformers container and normalized 256-dimensional vectors.
+
+After Airflow succeeds, `verify-integration.sql` checks exact episode membership,
+transcript fingerprints/segment counts, nonempty embeddings per episode, vector
+dimensions/normalization and import counts. A successful DAG alone is insufficient.
+The controller refreshes its API token for longer runs. It waits up to 90 minutes
+for the pipeline; the job has a 150-minute total limit for image builds and model
+downloads as well. Each run downloads the model afresh, so expect a slow cold start.
+
+Diagnostics (parent status, task logs, Compose logs and database assertions) are
+uploaded for seven days on success or failure. Credentials, raw artifacts and
+model weights are excluded from the upload. Cleanup removes runner containers,
+volumes and temporary credential files. Each retry starts with a new database.
+
+Local checks exercise fixed-selection success/failure and the real SQL verifier
+against ten synthetic transcripts with deterministic vectors, including rejection
+of a missing embedding. They do not establish hosted model throughput or prove
+the full Docker run; observe the first manually triggered GitHub run for that.
