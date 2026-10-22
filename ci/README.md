@@ -72,11 +72,10 @@ not reproduced by the local test run.
 
 ## Full pipeline integration
 
-[Pipeline integration](../.github/workflows/pipeline-integration.yml) runs on every
-push to `codex/containerised-download-pilot` while we validate the implementation.
-Pushes to other branches do not trigger it. A manual trigger is also configured:
-select a branch and choose **Run workflow** once the workflow exists on the default
-branch, as required by GitHub for the manual button.
+[Pipeline integration](../.github/workflows/pipeline-integration.yml) runs only
+when manually triggered; pushes do not start it. Select a branch and choose
+**Run workflow** in GitHub Actions. GitHub requires the workflow to exist on the
+default branch before offering the manual button.
 
 Configure two repository Actions secrets:
 

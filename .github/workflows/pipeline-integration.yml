@@ -1,9 +1,6 @@
 name: Pipeline integration
 
 on:
-  push:
-    branches:
-      - codex/containerised-download-pilot
   workflow_dispatch:
 
 permissions:
