@@ -5,3 +5,4 @@ project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
 venv/airflow/bin/python -m unittest tests.test_download_job tests.test_chunk_job tests.test_embedding_job tests.test_episode_descriptions
 bash database/test/test-loader
+bash mcp/test/run-tests

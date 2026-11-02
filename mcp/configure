@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Create/update the read-only login on an existing or freshly initialized database.
+set -euo pipefail
+project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$project_root"
+# Compose reads .env and supplies the existing administrator password inside postgres.
+# Supply the MCP password through stdin so it never appears in process arguments.
+python3 - <<'PY' | docker compose exec -T postgres sh -eu -c '
+  IFS= read -r RF_MCP_DATABASE_PASSWORD
+  export RF_MCP_DATABASE_PASSWORD PGPASSWORD="$POSTGRES_PASSWORD"
+  exec psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -U "$POSTGRES_USER" -d radiofrance -f /dev/stdin
+'
+from pathlib import Path
+import secrets
+
+path = Path('.env')
+lines = path.read_text().splitlines() if path.exists() else []
+key = 'RF_MCP_DATABASE_PASSWORD'
+password = next((line.split('=', 1)[1].strip().strip('\"\'') for line in lines
+                 if line.startswith(key + '=')), '')
+if not password:
+    password = secrets.token_urlsafe(32)
+    with path.open('a') as output:
+        output.write('\n' + key + '=' + password + '\n')
+path.chmod(0o600)
+print(password)
+print(Path('mcp/sql/access.sql').read_text())
+PY

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Use the existing disposable-cluster harness, never the catalogue database.
+set -euo pipefail
+project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$project_root"
+export PYTHONPATH="$project_root/src${PYTHONPATH:+:$PYTHONPATH}"
+RF_VALIDATE_MCP=1 bash database/test/test-setup

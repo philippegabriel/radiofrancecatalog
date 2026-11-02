@@ -24,3 +24,11 @@ src/**/__pycache__/**
 !airflow/
 !airflow/Dockerfile
 !airflow/ui_auth.py
+
+!mcp/
+!mcp/Dockerfile
+!mcp/requirements.txt
+!mcp/server.py
+!mcp/retrieval.py
+!mcp/sql/
+!mcp/sql/*.sql

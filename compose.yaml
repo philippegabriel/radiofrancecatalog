@@ -42,6 +42,44 @@ services:
       - ./data/embedding-pilot:/input/embeddings:ro
     restart: "no"
 
+  mcp:
+    image: radiofrance-mcp:dev
+    build:
+      context: .
+      dockerfile: mcp/Dockerfile
+    profiles: [mcp]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: radiofrance
+      PGUSER: radiofrance_mcp
+      PGPASSWORD: ${RF_MCP_DATABASE_PASSWORD:-}
+      RF_MCP_THREADS: ${RF_MCP_THREADS:-4}
+    volumes:
+      - type: bind
+        source: ${RF_HF_HUB_CACHE:-./data/embedding-models}
+        target: /models
+        read_only: true
+        bind:
+          create_host_path: false
+    ports:
+      - "127.0.0.1:${RF_MCP_PORT:-8083}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      start_period: 120s
+      retries: 10
+    init: true
+    read_only: true
+    tmpfs: [/tmp]
+    mem_limit: 4g
+    stop_grace_period: 30s
+    restart: "no"
+
   airflow:
     image: radiofrance-airflow:dev
     build:

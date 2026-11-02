@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Install the service definition without enabling it at boot or starting it.
+set -euo pipefail
+project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+unit="$(mktemp)"
+trap 'rm -f -- "$unit"' EXIT
+sed "s|@PROJECT_ROOT@|$project_root|g" "$project_root/mcp/radiofrance-mcp.service" > "$unit"
+sudo install -m 644 "$unit" /etc/systemd/system/radiofrance-mcp.service
+sudo systemctl daemon-reload

@@ -5,7 +5,8 @@
     "airflow",
     "database/test",
     "ci",
-    "tests"
+    "tests",
+    "mcp"
   ],
   "exclude": [
     "venv",
@@ -20,6 +21,8 @@
   "extraPaths": [
     "src",
     "airflow/dags",
-    "venv/radiofrance/lib/python3.14/site-packages"
+    "venv/radiofrance/lib/python3.14/site-packages",
+    "mcp",
+    "venv/mcp/lib/python3.14/site-packages"
   ]
 }

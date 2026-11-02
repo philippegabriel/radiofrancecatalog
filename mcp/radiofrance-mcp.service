@@ -1,0 +1,16 @@
+[Unit]
+Description=Radio France semantic search MCP container
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=@PROJECT_ROOT@
+ExecStart=/usr/bin/docker compose --profile mcp up -d --wait --wait-timeout 300 mcp
+ExecStop=/usr/bin/docker compose --profile mcp stop mcp
+TimeoutStartSec=330
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

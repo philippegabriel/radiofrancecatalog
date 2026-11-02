@@ -53,3 +53,9 @@ if [[ "${RF_VALIDATE_LOADER:-0}" = 1 ]]; then
     venv/airflow/bin/python -m unittest discover -s airflow/test -p 'test_*.py'
   )
 fi
+if [[ "${RF_VALIDATE_MCP:-0}" = 1 ]]; then
+  cd "$database_dir/.."
+  RF_MCP_DATABASE_PASSWORD=mcp-test-password psql -X -v ON_ERROR_STOP=1 -d radiofrance -f mcp/sql/access.sql > /dev/null
+  PGUSER=radiofrance PGDATABASE=radiofrance PGPASSWORD="$RF_DATABASE_PASSWORD" \
+    venv/mcp/bin/python -m unittest discover -s mcp/test -p 'test_*.py'
+fi
