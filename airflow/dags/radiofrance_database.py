@@ -109,6 +109,8 @@ selected run and configuration, not global totals across all imported shows/mode
             raise ValueError('Configure RF_DATABASE_PASSWORD in Compose')
         dsn = make_dsn(host=DATABASE_ENV['PGHOST'], port=DATABASE_ENV['PGPORT'],
             dbname=DATABASE_ENV['PGDATABASE'], user=DATABASE_ENV['PGUSER'], password=password)
+        if dsn is None:
+            raise ValueError('Could not construct the application database connection string')
         result = verify_import(prepared, dsn)
         print(f"Verified import {result['embedding_run']}: "
             f"{result['catalogue_episode_count']} catalogue entries, "

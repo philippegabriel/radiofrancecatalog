@@ -1,3 +1,39 @@
+-- Default to transcript search when invoked directly with psql.
+\if :{?descriptions}
+\else
+\set descriptions false
+\endif
+
+\if :descriptions
+-- Search episode metadata using the same query vector as transcript retrieval.
+WITH documents AS (
+    SELECT e.external_id AS episode_id, r.show, v.source_title AS title, r.web_url,
+           v.source_description AS description,
+           1 - (v.embedding <=> :'queryvector'::vector(256)) AS similarity
+    FROM episode_embedding v
+    JOIN rf r USING (episode_id)
+    JOIN episode_identity_external e ON e.id = v.episode_id
+    JOIN embedding_model model ON model.id = v.model_id
+    WHERE model.configuration @> '{
+        "model_id": "google/embeddinggemma-2",
+        "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b",
+        "precision": "float32", "dimensions": 256, "normalized": true,
+        "document_template": "title: {title} | text: {description}",
+        "query_prefix": "task: search result | query: "
+    }'::jsonb
+), unique_documents AS (
+    SELECT DISTINCT ON (title, description) *,
+           count(*) OVER (PARTITION BY title, description) AS duplicate_count
+    FROM documents
+    ORDER BY title, description, (NULLIF(btrim(web_url), '') IS NOT NULL) DESC,
+             similarity DESC, episode_id
+)
+SELECT episode_id, show, title, web_url, similarity, duplicate_count,
+       left(description, 300) AS description
+FROM unique_documents
+ORDER BY similarity DESC, episode_id
+LIMIT 10;
+\else
 -- Search FP32 256D Gemma vectors, then collapse identical full matching passages.
 -- Keep catalogue records intact; prefer a representative with a usable URL.
 WITH best_per_episode AS (
@@ -48,3 +84,4 @@ SELECT episode_id, show, title, web_url, chunk_no, start_time, end_time,
 FROM unique_passages
 ORDER BY similarity DESC, episode_id
 LIMIT 10;
+\endif

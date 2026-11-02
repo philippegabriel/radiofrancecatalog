@@ -1,4 +1,4 @@
-.PHONY: all dump test login resetdb clean reallyclean tr chunks uploadembeds dumpids query
+.PHONY: all dump test login resetdb clean reallyclean tr chunks uploadembeds dumpids query query-descriptions
 KEY=$(file < .OpenAPIKey)
 FC_URL := https://www.radiofrance.fr/franceculture/podcasts
 FI_URL := https://www.radiofrance.fr/franceinter/podcasts
@@ -113,9 +113,11 @@ dumpids:
 # Override with make query QUERY="your question" QUERY_PYTHON=/path/to/python.
 QUERY ?= général de Gaulle pendant la guerre
 QUERY_PYTHON ?= venv/radiofrance/bin/python
-query:
+QUERY_DESCRIPTIONS ?= false
+query-descriptions: QUERY_DESCRIPTIONS = true
+query query-descriptions:
 	@queryvector=$$(PYTHONPATH="$(CURDIR)/src$${PYTHONPATH:+:$$PYTHONPATH}" $(QUERY_PYTHON) query_to_embedding.py "$(QUERY)") && \
-	    $(PSQL) -v queryvector="$$queryvector" -f query.sql
+	    $(PSQL) -v descriptions="$(QUERY_DESCRIPTIONS)" -v queryvector="$$queryvector" -f query.sql
 
 test:
 	$(PSQL) < inventory.sql

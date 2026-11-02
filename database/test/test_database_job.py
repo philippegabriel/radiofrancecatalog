@@ -214,8 +214,9 @@ class DatabaseJobTests(unittest.TestCase):
             def write(cursor: job.Cursor, source: job.Prepared) -> None:
                 cursor.execute('DELETE FROM import_run')
             with patch.object(job, 'verify_committed', side_effect=write):
-                with self.assertRaises(psycopg2.errors.ReadOnlySqlTransaction):
+                with self.assertRaises(psycopg2.DatabaseError) as caught:
                     job.verify_database(prepared, self.dsn)
+                self.assertEqual(caught.exception.pgcode, '25006')
             self.assertEqual(self.counts(), (1, 1, 1))
 
     def test_verification_rejects_changed_configuration(self) -> None:

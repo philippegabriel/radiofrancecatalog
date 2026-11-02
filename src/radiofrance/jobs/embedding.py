@@ -126,14 +126,20 @@ def validate_vector(vector: list[float]) -> None:
 
 
 class SentenceEncoder:
-    """Load Google's text-only FP32 CPU model once, with no network access."""
+    """Load Google's text-only FP32 model once on CPU or CUDA, offline."""
 
-    def __init__(self, directory: Path, batch_size: int, threads: int) -> None:
+    def __init__(self, directory: Path, batch_size: int, threads: int, device: str = 'cpu') -> None:
         torch = importlib.import_module('torch')
         sentence = importlib.import_module('sentence_transformers')
         torch.set_num_threads(threads)
         torch.set_num_interop_threads(1)
-        self.model = sentence.SentenceTransformer(str(directory), device='cpu', local_files_only=True,
+        if device == 'cuda':
+            if not torch.cuda.is_available():
+                raise RuntimeError('CUDA is unavailable; refusing to fall back to CPU')
+            torch.backends.cuda.matmul.allow_tf32 = False
+            torch.backends.cudnn.allow_tf32 = False
+            torch.set_float32_matmul_precision('highest')
+        self.model = sentence.SentenceTransformer(str(directory), device=device, local_files_only=True,
             config_kwargs={'vision_config': None, 'audio_config': None}, model_kwargs={'dtype': torch.float32})
         self.batch_size = batch_size
         self.model.max_seq_length = MAX_TOKENS
@@ -141,6 +147,10 @@ class SentenceEncoder:
     def encode(self, texts: list[str]) -> list[list[float]]:
         """Apply the document prefix, reject overlength inputs, truncate and normalize."""
         formatted = [DOCUMENT_PREFIX + text for text in texts]
+        return self.encode_formatted(formatted)
+
+    def encode_formatted(self, formatted: list[str]) -> list[list[float]]:
+        """Encode explicitly formatted documents or queries without adding another prefix."""
         lengths = [len(tokens) for tokens in self.model.tokenizer(formatted, truncation=False)['input_ids']]
         if any(length > MAX_TOKENS for length in lengths):
             raise ValueError('Chunk exceeds model token limit; refusing silent truncation')
