@@ -24,6 +24,9 @@ __pycache__/
 /data/embedding-models/
 /data/embedding-runtime/
 /data/embedding-pilot/
+/data/embedding-export/
+/data/embedding-backfill/
+/data/embeddings/
 
 # Generated pipeline artifacts, benchmark environments and database backups
 /data/download-pilot/

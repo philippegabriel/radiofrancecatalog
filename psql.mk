@@ -18,7 +18,7 @@ CODS:= $(addsuffix .cutOffDate, $(PODCASTS))
 CACHEDDBS := $(addprefix data/,$(DBS))
 CACHEDCSVS := $(addprefix data/,$(CSVS))
 TARGETS:= $(CSVS) $(addsuffix .html, $(PODCASTS))
-PSQL := psql -X -v ON_ERROR_STOP=1 -U pgabriel radiofrance
+PSQL := psql -h 127.0.0.1 -p 55432 -X -v ON_ERROR_STOP=1 -U radiofrance -d radiofrance
 PYTHON ?= python
 TRANSCRIPT_JSONS := $(wildcard transcripts/*.json)
 TRCDBS := $(patsubst transcripts/%.json,data/transcripts/%.db,$(TRANSCRIPT_JSONS))
@@ -110,10 +110,12 @@ dumpids:
 	$(PSQL) -At -c "SELECT id FROM rf_external WHERE show = 'lsd-la-serie-documentaire';" > lsd-la-serie-documentaire.ids.csv
 	$(PSQL) -At -c "SELECT id FROM rf_external WHERE show = 'mecaniques-du-journalisme';" > mecaniques-du-journalisme.ids.csv
 
+# Override with make query QUERY="your question" QUERY_PYTHON=/path/to/python.
+QUERY ?= général de Gaulle pendant la guerre
+QUERY_PYTHON ?= venv/radiofrance/bin/python
 query:
-	$(eval querytext:= "Pompidou")
-	@$(eval queryvector:=$(shell python query_to_embedding.py --hftoken .hftoken $(querytext)))
-	@$(PSQL) -v queryvector=$(queryvector) < query.sql
+	@queryvector=$$(PYTHONPATH="$(CURDIR)/src$${PYTHONPATH:+:$$PYTHONPATH}" $(QUERY_PYTHON) query_to_embedding.py "$(QUERY)") && \
+	    $(PSQL) -v queryvector="$$queryvector" -f query.sql
 
 test:
 	$(PSQL) < inventory.sql

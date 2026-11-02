@@ -1,61 +1,47 @@
 #!/usr/bin/env python3
+"""Encode a search query with the cached corpus-compatible EmbeddingGemma 2 model."""
 
 import argparse
+import json
 from pathlib import Path
-from collections.abc import Iterable
+from typing import cast
 
-from sentence_transformers import SentenceTransformer
-
-
-MODEL_NAME = "intfloat/multilingual-e5-small"
+from radiofrance.jobs.embedding import (
+    DIMENSIONS, MAX_TOKENS, QUERY_PREFIX, SentenceEncoder,
+    cached_snapshot, default_model_cache, validate_vector, verify_model,
+)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Generate an embedding for a semantic search query."
-    )
-    parser.add_argument(
-        "--hftoken",
-        required=True,
-        type=Path,
-        help="File containing the Hugging Face access token",
-    )
-    parser.add_argument(
-        "query",
-        help="Natural-language search query",
-    )
+    """Accept a query and offline model-cache settings; no token is needed."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--model-cache', type=Path, default=default_model_cache(),
+                        help='Hugging Face Hub cache containing the pinned model revision')
+    parser.add_argument('--threads', type=int, default=4)
+    parser.add_argument('query', help='Natural-language search query')
     return parser.parse_args()
 
 
-def read_token(path: Path) -> str:
-    token = path.read_text(encoding="utf-8").strip()
-
-    if not token:
-        raise ValueError(f"Empty token file: {path}")
-
-    return token
-
-
-def vector_to_string(vector: Iterable[float]) -> str:
-    return "[" + ",".join(str(value) for value in vector) + "]"
+def encode_query(query: str, cache: Path, threads: int = 4) -> list[float]:
+    """Return one FP32 CPU query vector, truncating to 256D before normalization."""
+    if not query.strip() or threads < 1:
+        raise ValueError('Provide a nonempty query and positive thread count')
+    verify_model(cache)
+    encoder = SentenceEncoder(cached_snapshot(cache), batch_size=1, threads=threads)
+    formatted = QUERY_PREFIX + query
+    if len(encoder.model.tokenizer(formatted, truncation=False)['input_ids']) > MAX_TOKENS:
+        raise ValueError('Query exceeds model token limit')
+    vector = cast(list[float], encoder.model.encode(formatted, truncate_dim=DIMENSIONS,
+        normalize_embeddings=True, show_progress_bar=False).tolist())
+    validate_vector(vector)
+    return vector
 
 
 def main() -> None:
+    """Print only the PostgreSQL-compatible vector on standard output."""
     args = parse_args()
-    token = read_token(args.hftoken)
-
-    model = SentenceTransformer(
-        MODEL_NAME,
-        token=token,
-    )
-
-    embedding = model.encode(
-        f"query: {args.query}",
-        normalize_embeddings=True,
-    )
-
-    print(vector_to_string(embedding))
+    print(json.dumps(encode_query(args.query, args.model_cache, args.threads), allow_nan=False))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
