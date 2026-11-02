@@ -82,8 +82,11 @@ Outputs appear in `data/embedding-pilot/airflow-<run-id>/`.
 
 ## Outputs and retries
 
-Each episode produces JSONL records containing `episode_id`, `chunk_index` and
-an `embedding` array of 256 finite, unit-normalized coordinates.
+Each episode produces `<episode_id>.npy`: a float32 matrix with shape
+`(chunk_count, 256)`. Row `i` contains chunk `i`'s finite, unit-normalized vector.
+Files are saved and loaded with `allow_pickle=False`; object arrays, wrong dtypes,
+wrong shapes and invalid vectors are rejected. Version-3 embedding manifests
+reference only NPY files; previous JSONL embedding runs must be converted first.
 The completion manifest records the source run, file paths, counts, model revision,
 runtime versions and embedding configuration. No model-file inventory is created.
 

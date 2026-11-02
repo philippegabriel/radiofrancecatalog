@@ -12,6 +12,8 @@ import re
 import tempfile
 from typing import Protocol, TypedDict, cast
 
+import numpy as np
+
 from radiofrance.jobs.chunk import ChunkManifest, contained_file, verify_output as verify_chunks
 
 MODEL_ID = 'google/embeddinggemma-2'
@@ -146,14 +148,35 @@ class SentenceEncoder:
             truncate_dim=DIMENSIONS, normalize_embeddings=True, show_progress_bar=False).tolist())
 
 
+def read_vectors(path: Path, episode: str, count: int) -> list[EmbeddingRow]:
+    """Read an FP32 NPY matrix; filename identifies the episode and row i is chunk i.
+
+    Pickled objects are forbidden. Shape, dtype and unit norms are checked before
+    vectors reach the database loader. Text embedding formats are not supported.
+    """
+    if path.name != episode + '.npy':
+        raise ValueError('Embedding identity mismatch')
+    matrix = np.load(path, allow_pickle=False)
+    if not isinstance(matrix, np.ndarray):
+        matrix.close()
+        raise ValueError('Expected an NPY matrix')
+    if matrix.dtype != np.dtype('float32') or matrix.shape != (count, DIMENSIONS):
+        raise ValueError('Expected float32 embedding matrix with shape (chunk_count, 256)')
+    rows: list[EmbeddingRow] = [{'episode_id': episode, 'chunk_index': index,
+                               'embedding': vector.tolist()} for index, vector in enumerate(matrix)]
+    for row in rows:
+        validate_vector(row['embedding'])
+    return rows
+
+
 def verify_output(directory: Path, source_manifest: Path | None = None) -> EmbeddingManifest:
     """Verify output identities, 256D norms, counts and optional source lineage."""
     manifest = cast(EmbeddingManifest, json.loads((directory / 'manifest.json').read_text()))
     raw_config = cast(dict[str, object], manifest['configuration'])
     config = cast(Configuration, {key: raw_config[key] for key in Configuration.__annotations__})
     manifest['configuration'] = config
-    if manifest['version'] not in (1, 2) or manifest['stage'] != 'embedding':
-        raise ValueError('Expected a version-1 or version-2 embedding manifest')
+    if manifest['version'] != 3 or manifest['stage'] != 'embedding':
+        raise ValueError('Expected a version-3 NPY embedding manifest')
     if (config['model_id'], config['revision'], config['runtime'], config['precision'], config['dimensions'], config['normalized'],
         config['document_prefix'], config['query_prefix'], config['max_tokens']) != (
         MODEL_ID, MODEL_REVISION, 'sentence-transformers', 'float32', DIMENSIONS, True,
@@ -169,18 +192,7 @@ def verify_output(directory: Path, source_manifest: Path | None = None) -> Embed
         seen.add(episode)
         paths.add(item['path'])
         path = contained_file(directory, item['path'])
-        if path.name != f'{episode}.jsonl':
-            raise ValueError('Embedding identity mismatch')
-        count = 0
-        with path.open(encoding='utf-8') as stream:
-            for index, line in enumerate(stream):
-                row = cast(EmbeddingRow, json.loads(line))
-                if row['episode_id'] != episode or type(row['chunk_index']) is not int or row['chunk_index'] != index:
-                    raise ValueError('Embedding row identity or index mismatch')
-                validate_vector(row['embedding'])
-                count += 1
-        if count != item['chunk_count']:
-            raise ValueError('Embedding row count mismatch')
+        count = len(read_vectors(path, episode, item['chunk_count']))
         total += count
     if manifest['episode_count'] != len(seen) or manifest['chunk_count'] != total:
         raise ValueError('Embedding manifest totals mismatch')
@@ -196,7 +208,7 @@ def verify_output(directory: Path, source_manifest: Path | None = None) -> Embed
 
 def run_embedding(source_manifest: Path, output: Path, model_cache: Path, batch_size: int = 1,
                   threads: int = 4, encoder: Encoder | None = None) -> EmbeddingManifest:
-    """Embed a completed chunk run and atomically publish immutable per-episode JSONL.
+    """Embed a completed chunk run and atomically publish immutable per-episode FP32 NPY matrices.
 
     Input/model mounts may be read-only. Load once per job, then reuse across all
     episodes. Empty runs publish without importing ML libraries. No database or
@@ -224,23 +236,23 @@ def run_embedding(source_manifest: Path, output: Path, model_cache: Path, batch_
             path = contained_file(source_manifest.parent, item['path'])
             with path.open(encoding='utf-8', newline='') as stream:
                 rows = list(csv.reader(stream))
-            target = staging / f"{item['episode_id']}.jsonl"
-            with target.open('w', encoding='utf-8') as stream:
-                for offset in range(0, len(rows), batch_size):
-                    if encoder is None:
-                        raise RuntimeError('Missing encoder for nonempty source')
-                    batch = rows[offset:offset+batch_size]
-                    vectors = encoder.encode([row[-1] for row in batch])
-                    if len(vectors) != len(batch):
-                        raise ValueError('Model returned the wrong number of vectors')
-                    for index, vector in enumerate(vectors, start=offset):
-                        validate_vector(vector)
-                        record: EmbeddingRow = {'episode_id': item['episode_id'], 'chunk_index': index, 'embedding': vector}
-                        stream.write(json.dumps(record, ensure_ascii=False, allow_nan=False) + '\n')
+            target = staging / f"{item['episode_id']}.npy"
+            matrix = np.empty((len(rows), DIMENSIONS), dtype=np.float32)
+            for offset in range(0, len(rows), batch_size):
+                if encoder is None:
+                    raise RuntimeError('Missing encoder for nonempty source')
+                batch = rows[offset:offset+batch_size]
+                vectors = encoder.encode([row[-1] for row in batch])
+                if len(vectors) != len(batch):
+                    raise ValueError('Model returned the wrong number of vectors')
+                for index, vector in enumerate(vectors, start=offset):
+                    validate_vector(vector)
+                    matrix[index] = vector
+            np.save(target, matrix, allow_pickle=False)
             artifacts.append({'episode_id': item['episode_id'], 'path': target.name,
                 'chunk_count': len(rows)})
             print(f"Embedded {len(rows)} chunks: {item['episode_id']}", flush=True)
-        manifest: EmbeddingManifest = {'version': 2, 'stage': 'embedding', 'show': source['show'],
+        manifest: EmbeddingManifest = {'version': 3, 'stage': 'embedding', 'show': source['show'],
             'source_run': source_manifest.parent.name,
             'configuration': config, 'episode_count': len(artifacts),
             'chunk_count': sum(item['chunk_count'] for item in artifacts), 'embeddings': artifacts}

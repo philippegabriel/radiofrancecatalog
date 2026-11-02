@@ -14,7 +14,7 @@ from psycopg2 import sql
 from psycopg2.extensions import cursor as Cursor
 
 from radiofrance.jobs.chunk import ChunkManifest, DownloadManifest, contained_file, validate_source, verify_output as verify_chunks
-from radiofrance.jobs.embedding import EmbeddingManifest, EmbeddingRow, verify_output as verify_embeddings
+from radiofrance.jobs.embedding import EmbeddingManifest, EmbeddingRow, read_vectors, verify_output as verify_embeddings
 from radiofrance.libs.types import TranscriptSegment
 from radiofrance.libs.transcript_json import read_segments
 
@@ -123,7 +123,7 @@ def prepare(embedding_manifest: Path, chunk_root: Path, download_root: Path) -> 
             if (row[6] != text or float(row[4]) != segments[start]['start']
                     or float(row[5]) != segments[end]['end']):
                 raise ValueError('Chunk text/timestamps do not match transcript')
-        vectors = [cast(EmbeddingRow, json.loads(line)) for line in embedding_file.read_text().splitlines()]
+        vectors = read_vectors(embedding_file, identity, embedding_item['chunk_count'])
         episodes.append({'external_id': identity,
             'segments': segments, 'chunks': rows, 'embeddings': vectors})
     return {'embedding_run': embedding_run, 'chunk_run': chunk_run,

@@ -51,7 +51,7 @@ has no network, and input/model mounts are read-only. Only the host hf download 
 or corrupt cached snapshots before loading the model; Airflow does not mount the user cache. Container memory is limited to 4 GiB.
 
 ## Outputs and recovery
-Per-episode JSONL vectors and a completion manifest are published atomically to
+Per-episode FP32 NPY vectors and a completion manifest are published atomically to
  data/embedding-pilot/airflow-<run-id>/. Existing output is never overwritten.
 Empty chunk runs publish empty output without loading the model. Trigger a new
 DAG run after processing failure; automatic retries are disabled. Verification
@@ -88,7 +88,7 @@ package versions, chunk-source run names and model revision.
 
     @task
     def verify_embeddings(state: EmbeddingRun) -> None:
-        """Verify all published JSONL vectors and their selected chunk/model lineage.
+        """Verify all published FP32 NPY vectors and their selected chunk/model lineage.
 
         Read artifacts from read-only mounts; fail on corrupt/missing files,
         identities, dimensions, normalization or provenance. Write nothing and
@@ -113,7 +113,7 @@ package versions, chunk-source run names and model revision.
         user=f"{os.environ.get('RF_UID', '1000')}:{os.environ.get('RF_GID', '1000')}",
         mount_tmp_dir=False, network_mode='none', mem_limit='4g', auto_remove='force',
         execution_timeout=timedelta(hours=2), do_xcom_push=False,
-        doc_md='Load the pinned Google model once on CPU in FP32; read verified chunk CSVs, produce normalized 256D JSONL and a completion manifest. No network, credentials or database access.',
+        doc_md='Load the pinned Google model once on CPU in FP32; read verified chunk CSVs, produce normalized 256D FP32 NPY and a completion manifest. No network, credentials or database access.',
     )
     checked = verify_embeddings(state)  # pyright: ignore[reportArgumentType]
     _ = state >> embed >> checked

@@ -2,3 +2,5 @@
 apache-airflow[postgres]==3.3.2
 apache-airflow-providers-docker==4.5.9
 graphviz==0.21
+
+numpy==2.5.3

@@ -3,6 +3,8 @@
 import csv
 import json
 import os
+
+import numpy as np
 from pathlib import Path
 import stat
 import tempfile
@@ -75,7 +77,7 @@ class EmbeddingJobTests(unittest.TestCase):
             self.assertEqual(result['configuration']['dimensions'], 256)
             self.assertEqual(source.read_bytes(), before)
             self.assertEqual(stat.S_IMODE((root / 'output').stat().st_mode), 0o755)
-            self.assertEqual(stat.S_IMODE((root / 'output/episode_5.jsonl').stat().st_mode), 0o644)
+            self.assertEqual(stat.S_IMODE((root / 'output/episode_5.npy').stat().st_mode), 0o644)
             with self.assertRaises(FileExistsError):
                 job.run_embedding(source, root / 'output', model, encoder=FakeEncoder())
 
@@ -105,14 +107,11 @@ class EmbeddingJobTests(unittest.TestCase):
             model = self.model(root / 'model')
             output = root / 'output'
             result = job.run_embedding(source, output, model, encoder=FakeEncoder())
-            path = output / 'episode_5.jsonl'
-            records = [json.loads(line) for line in path.read_text().splitlines()]
-            records[0]['embedding'] = [1.0]
-            path.write_text(''.join(json.dumps(record) + '\n' for record in records))
-            job.write_json(output / 'manifest.json', result)
-            with self.assertRaisesRegex(ValueError, '256 finite'):
+            path = output / 'episode_5.npy'
+            np.save(path, np.ones((2, 1), dtype=np.float32), allow_pickle=False)
+            with self.assertRaisesRegex(ValueError, 'float32 embedding matrix'):
                 job.verify_output(output, source)
-            result['embeddings'][0]['path'] = '../outside.jsonl'
+            result['embeddings'][0]['path'] = '../outside.npy'
             job.write_json(output / 'manifest.json', result)
             with self.assertRaises(ValueError):
                 job.verify_output(output, source)
@@ -122,6 +121,32 @@ class EmbeddingJobTests(unittest.TestCase):
             job.write_json(output2 / 'manifest.json', result)
             with self.assertRaisesRegex(ValueError, 'does not match'):
                 job.verify_output(output2, source)
+
+    def test_npy_shape_dtype_values_and_legacy_rejection(self) -> None:
+        """Require FP32 matrices, exact row counts and finite unit vectors; reject text runs."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = self.source(root / 'chunks')
+            output = root / 'output'
+            manifest = job.run_embedding(source, output, self.model(root / 'cache'), encoder=FakeEncoder())
+            path = output / 'episode_5.npy'
+            matrix = np.load(path, allow_pickle=False)
+            self.assertEqual(matrix.shape, (2, 256))
+            self.assertEqual(matrix.dtype, np.dtype('float32'))
+            self.assertEqual(job.read_vectors(path, 'episode_5', 2)[1]['chunk_index'], 1)
+            bad = matrix.copy()
+            bad[0, 0] = float('nan')
+            for invalid in (matrix.astype(np.float64), matrix[:1], matrix.reshape(512),
+                            np.zeros((2, 256), dtype=np.float32), bad,
+                            np.array([object()], dtype=object)):
+                np.save(path, invalid)
+                with self.assertRaises(ValueError):
+                    job.verify_output(output, source)
+            for legacy in (1, 2):
+                manifest['version'] = legacy
+                job.write_json(output / 'manifest.json', manifest)
+                with self.assertRaisesRegex(ValueError, 'version-3 NPY'):
+                    job.verify_output(output, source)
 
     def test_missing_model_files_and_revision(self) -> None:
         """Accept local cache links and require the pinned revision and necessary model files."""
