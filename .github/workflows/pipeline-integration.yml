@@ -56,7 +56,11 @@ jobs:
         run: |
           mkdir -p "$RF_CI_EVIDENCE"
           docker compose logs --no-color > "$RF_CI_EVIDENCE/compose.log" 2>&1 || true
-          docker compose cp airflow:/opt/airflow/logs "$RF_CI_EVIDENCE/task-logs" > "$RF_CI_EVIDENCE/log-copy.log" 2>&1 || true
+          # Airflow log paths contain colons; upload-artifact rejects these names.
+          # Stage raw logs outside the upload tree; preserve their paths in an archive.
+          task_logs="$(mktemp -d)"
+          docker compose cp airflow:/opt/airflow/logs "$task_logs/" > "$RF_CI_EVIDENCE/log-copy.log" 2>&1 || true
+          tar -czf "$RF_CI_EVIDENCE/task-logs.tar.gz" -C "$task_logs" .
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

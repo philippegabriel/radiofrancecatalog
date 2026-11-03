@@ -146,3 +146,8 @@ and enables the single-show coordinator as well as all four stages. Fresh databa
 initialization includes the `"show"` registry. Local database tests cover URL
 validation, registration idempotence, enabled selection, transaction rollback and
 acquisition/loading for a show absent from the former hard-coded list.
+
+Airflow task logs are uploaded as `task-logs.tar.gz` so original timestamped
+paths (including colons) are preserved without violating artifact filename rules.
+Extract that archive to inspect individual task attempts. Other diagnostics and
+the generated HTML catalogue remain directly browsable in the artifact.
