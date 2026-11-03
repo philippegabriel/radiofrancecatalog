@@ -1,3 +1,3 @@
 requests==2.34.2
-# Imported by the existing catalogue module; the download job opens no DB connections.
+# Reads the committed application database cutoff in a read-only transaction.
 psycopg2-binary==2.9.13

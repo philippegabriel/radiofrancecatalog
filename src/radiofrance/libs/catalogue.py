@@ -1,18 +1,13 @@
-import csv
-import os
-from importlib.resources import files
-from contextlib import contextmanager
-import psycopg2
+"""Catalogue metadata shared by download artifacts and the database loader."""
+import json
 from pathlib import Path
-from collections.abc import Iterator
-from datetime import date
 from typing import TypedDict, cast
-from psycopg2.extensions import cursor as PostgreSQLCursor
+
 
 class CatalogueRow(TypedDict):
     show: str
     published_iso: str
-    published_ts: str
+    published_ts: int
     title: str
     description: str
     web_url: str
@@ -22,81 +17,26 @@ class CatalogueRow(TypedDict):
     id: str
 
 
-type SQLValue = str | int | date | None
-
-FIELDS: list[str] = ['show', 'published_iso', 'published_ts', 'title', 'description', 'web_url', 'podcast_title', 'podcast_url', 'player_url', 'id']
+FIELDS: list[str] = list(CatalogueRow.__annotations__)
 SHOWS: dict[str, str] = {
     'affaires-sensibles': 'franceinter',
-    **dict.fromkeys(['lsd-la-serie-documentaire', 'les-nuits-de-france-culture', 'les-pieds-sur-terre', 'le-cours-de-l-histoire', 'mecaniques-du-journalisme'], 'franceculture'),
+    **dict.fromkeys(['lsd-la-serie-documentaire', 'les-nuits-de-france-culture', 'les-pieds-sur-terre',
+                    'le-cours-de-l-histoire', 'mecaniques-du-journalisme'], 'franceculture'),
 }
 
 
 def read_rows(path: str | Path, show: str) -> list[CatalogueRow]:
-    with Path(path).open(encoding='utf-8', newline='') as stream:
-        reader = csv.DictReader(stream)
-        if reader.fieldnames != FIELDS:
-            raise ValueError(f'Unexpected catalogue columns in {path}')
-        rows = cast(list[CatalogueRow], list(reader))
+    """Read a JSON metadata delta; reject missing fields, invalid timestamps and duplicate IDs."""
+    raw: object = json.loads(Path(path).read_text(encoding='utf-8'))
+    if not isinstance(raw, list):
+        raise ValueError('Expected a JSON episode list')
     seen: set[str] = set()
-    for row in rows:
-        if row['show'] != show or not row['id'] or row['id'] in seen or None in row.values() or None in row:
-            raise ValueError(f'Invalid or duplicate episode in {path}')
-        int(row['published_ts'])
+    for row in raw:
+        if (not isinstance(row, dict) or set(row) != set(FIELDS)
+                or any(not isinstance(row[key], str) for key in FIELDS if key != 'published_ts')
+                or type(row['published_ts']) is not int or row['published_ts'] < 0):
+            raise ValueError('Invalid episode metadata fields or publication timestamp')
+        if row['show'] != show or not row['id'] or row['id'] in seen:
+            raise ValueError('Invalid show or duplicate episode ID')
         seen.add(row['id'])
-    return rows
-
-
-SQL = files('radiofrance.sql.catalogue')
-
-
-@contextmanager
-def catalogue_session(path: str | Path, show: str) -> Iterator[PostgreSQLCursor]:
-    """Load CSV rows into a temporary catalogue; roll back on exit."""
-    rows = read_rows(path, show)
-    # An explicit separate DSN prevents using Airflow metadata as scratch space.
-    connection = psycopg2.connect(os.environ.get('RF_CATALOGUE_DSN', 'dbname=radiofrance user=pgabriel'))
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute("SET LOCAL search_path TO pg_temp")
-            cursor.execute("SET LOCAL TIME ZONE 'UTC'")
-            cursor.execute(SQL.joinpath('catalogue_csv_schema.sql').read_text())
-            from io import StringIO
-            buffer = StringIO()
-            writer = csv.DictWriter(buffer, fieldnames=FIELDS)
-            writer.writeheader()
-            writer.writerows(rows)
-            buffer.seek(0)
-            cursor.copy_expert('COPY rf FROM STDIN WITH (FORMAT CSV, HEADER TRUE)', buffer)
-            yield cursor
-    finally:
-        connection.rollback()
-        connection.close()
-
-
-def query_catalogue(path: str | Path, show: str, sql_file: str) -> tuple[list[str], list[tuple[SQLValue, ...]]]:
-    query = SQL.joinpath(sql_file).read_text().replace(":'show'", '%s')
-    with catalogue_session(path, show) as cursor:
-        cursor.execute(query, (show,))
-        assert cursor.description is not None
-        headers = [column.name for column in cursor.description]
-        return headers, cast(list[tuple[SQLValue, ...]], cursor.fetchall())
-
-
-def cutoff(path: str | Path, show: str) -> str:
-    value = query_catalogue(path, show, 'cutoffdate.sql')[1][0][0]
-    if not isinstance(value, str):
-        raise TypeError('Cutoff SQL must return a timestamp string')
-    return value
-
-
-def merge(baseline: str | Path, updates: str | Path, output: str | Path, show: str) -> int:
-    rows = {r['id']: r for r in read_rows(baseline, show)}
-    rows.update({r['id']: r for r in read_rows(updates, show)})
-    ordered = sorted(rows.values(), key=lambda r: (int(r['published_ts']), r['id']))
-    temporary = Path(output).with_suffix('.csv.tmp')
-    with temporary.open('w', encoding='utf-8', newline='') as stream:
-        writer = csv.DictWriter(stream, fieldnames=FIELDS)
-        writer.writeheader()
-        writer.writerows(ordered)
-    temporary.replace(output)
-    return len(ordered)
+    return cast(list[CatalogueRow], raw)

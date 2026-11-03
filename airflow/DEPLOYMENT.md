@@ -144,8 +144,8 @@ transcript directories are modified by the smoke test.
 ## 5. Connect the pilot download container
 
 Run these commands from the project root. Keep `.OpenAPIKey` as a file
-containing the API key, and retain `data/mecaniques-du-journalisme.csv` as the
-pilot baseline. The secret is mounted read-only into the download container;
+containing the API key. The application database supplies the catalogue cutoff;
+no baseline CSV is required. The secret is mounted read-only into the download container;
 it is not exported into Airflow or stored in XCom.
 
 First, capture the host paths and permissions, **without sudo**:
@@ -176,8 +176,9 @@ sudo docker build -f download/Dockerfile -t radiofrance-download:pilot .
 sudo docker compose up -d --build --wait --wait-timeout 300
 ```
 
-Rebuild the download image even if you built it earlier: this version accepts
-`--api-key-file`. Compose reads `.env` itself, including when invoked through sudo.
+Rebuild the download image even if you built it earlier: it now reads PostgreSQL
+and publishes JSON episode metadata. Rebuild the chunk and database-loader images
+as well when upgrading from CSV-based download runs (see download/README.md). Compose reads `.env` itself, including when invoked through sudo.
 It preserves your existing metadata/history and configured UI login.
 
 In the UI, enable **radiofrance_download** and trigger one run. It executes:
@@ -186,18 +187,22 @@ In the UI, enable **radiofrance_download** and trigger one run. It executes:
 prepare_download -> download (DockerOperator) -> verify_download
 ```
 
-The download container reads the baseline and key read-only, writes outputs as
-your host UID/GID, and is removed after the task finishes. Its stdout appears in
-the Airflow task log; the final task verifies the show and artifact files and counts.
-Artifacts remain under `data/download-pilot/airflow-<run-id>/`, including
-`manifest.json`, the cumulative CSV, updates and any new transcripts. No API key
-appears in the command line. There are no S3 calls, asset events or DB imports.
+The download container reads the application's committed publication cutoff in
+PostgreSQL using a read-only transaction on the Compose network. The database
+password is passed privately, and the API key is mounted read-only. The child
+writes outputs as your host UID/GID and is removed when finished. Its stdout
+appears in the task log; verification checks the show, metadata/transcript
+membership and artifact files. Outputs under `data/download-pilot/airflow-<run-id>/`
+contain `episodes.json`, raw transcripts and a version-2 manifest. No catalogue
+CSV is read or written. There are no S3 calls, asset events or DB writes here.
 
-The baseline is **not promoted automatically**. Repeated runs against an unchanged
-baseline may download the same new episodes into separate directories. An empty
-update is valid. We will address baseline promotion and processing state when
-connecting the application database. Trigger a new DAG run after a failure;
-automatic retries are disabled and completed outputs are not overwritten.
+The cutoff advances only after the final database stage commits new episodes.
+A standalone download does not advance it. Repeated downloads before loading
+may therefore fetch the same delta; after successful loading, a new pipeline run
+skips committed IDs. Unseen IDs sharing the latest timestamp are included. An
+empty update is valid. A database connection error fails rather than treating
+the catalogue as empty. Trigger a new run after failure; automatic retries are
+disabled and completed outputs are never overwritten.
 
 The host Docker socket is now mounted in Airflow, with its group supplied through
 `.env`. This is powerful access to the host: use only trusted DAG code.
@@ -206,7 +211,7 @@ execution, not a second Docker daemon running inside Airflow.
 
 If the task cannot connect to Docker, rerun the host `stat` command and update
 `RF_DOCKER_GID`, then recreate Airflow. If it reports an unknown `--api-key-file`
-option, rebuild the download image. A missing baseline/key or unavailable transcript
+option, rebuild the download image. An unavailable application database, missing key or unavailable transcript
 fails the task rather than silently skipping work.
 
 If verification fails with `PermissionError` on an output produced by an older
@@ -292,10 +297,11 @@ The pipeline passes explicit run-directory references; it never scans for the
 latest output. Files remain in `data/download-pilot`, `data/chunk-pilot` and
 `data/embedding-pilot`. The final database stage follows that exact artifact chain.
 Each parent run uses distinct child run IDs and producing-stage directories.
-The pilot still uses `mecaniques-du-journalisme` and the configured baseline CSV;
-the pipeline does not advance or overwrite that baseline. A second pipeline run
-may therefore download the same delta again. Database imports reuse matching
-immutable data. Successful empty deltas also flow through the full chain.
+`RF_SHOW` selects the show (default `mecaniques-du-journalisme`). Downloads read
+its committed PostgreSQL cutoff and publish only a JSON metadata delta and new
+transcripts. The final database commit advances the cutoff. A second pipeline run
+skips already-loaded IDs, including those at the latest timestamp. Database imports
+reuse matching immutable data. Successful empty deltas flow through the full chain.
 
 If a stage fails, later stages do not start. Inspect its child run and inputs.
 For a whole-pipeline retry, trigger a new pipeline run. Automatic retries and

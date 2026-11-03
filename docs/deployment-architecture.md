@@ -46,8 +46,8 @@ assets are not needed for the target design.
 
 The [download pilot](../download/README.md) already supports files and
 container execution. Its manifest records artifact paths and counts. Keep that
-boundary and publish completion only after successful processing. Reconcile its
-baseline-derived cutoff with the existing DAG's cutoff before connecting them.
+boundary and publish completion only after successful processing. Downloads read
+the committed per-show PostgreSQL cutoff and publish JSON metadata deltas. Only successful final loading advances that cutoff.
 
 Current DAGs live in `airflow/dags/` and use the containerized pipeline.
 The older S3 DAGs and their GitHub workflows have been retired. Shared catalogue

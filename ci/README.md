@@ -85,7 +85,7 @@ Configure two repository Actions secrets:
 
 The existing AWS secrets and `AIRFLOW_FERNET_KEY` are not used. The workflow runs
 entirely on a disposable Ubuntu runner; it does not connect to your installation.
-It creates an empty baseline and selects exactly the ten committed episode IDs
+It starts with an empty application database and selects exactly the ten committed episode IDs
 in `fixtures/le-cours-de-l-histoire.json`. Metadata and transcripts are fetched
 live, with transcript segment counts checked before publication.
 A missing episode or changed transcript fails the run without substitution.
@@ -119,14 +119,14 @@ the full Docker run; observe the first GitHub run for that.
 
 Processing code lives in `src/radiofrance`. Callable commands remain at package
 level or under `jobs/`; shared modules without a `main()` live in `libs/`
-(`catalogue`, `types`, `episode_selection`, `transcript_json`).
+(`catalogue`, `download_state`, `types`, `episode_selection`, `transcript_json`).
 From the repository root, install it
 into a development environment with `venv/airflow/bin/python -m pip install -e .`.
 Stage-specific dependencies remain in their existing requirements files; package
 installation alone does not install Airflow, PyTorch or model libraries. CI's
 requirements install this package in editable mode. Containers install a regular
-copy, including the SQL resources maintained in `database/sql`. The current CSV-baseline cutoff
-queries are kept in its `catalogue/` subdirectory and packaged as well.
+copy, including SQL resources maintained in `database/sql`. `download_state.sql`
+reads the committed per-show cutoff; download runs publish JSON metadata deltas.
 
 The job entry points are `python -m radiofrance.jobs.download`, `.chunk`,
 `.embedding` and `.database` (use the full module name for each). The standalone

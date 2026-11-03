@@ -1,110 +1,112 @@
-# Download deployment pilot
+# Download stage
 
-This pilot is an independent command around the existing Radio France API
-clients and CSV merger. It does not rewrite or replace the working Airflow Download
-DAG. The next step is to run it from a Airflow deployment using Docker Compose.
+The download job uses PostgreSQL as the catalogue source of truth. It reuses
+`radiofrance.fetch_episodes.fetch_all` and
+`radiofrance.fetch_transcripts.fetch_transcript` for acquisition. No baseline CSV,
+cumulative catalogue CSV, temporary catalogue table or CSV merge is involved.
+The standalone episode CLI can still export CSV when explicitly requested.
 
-## Contract
+## Cutoff and publication contract
 
-Acquisition is shared with the original scripts: `rf_dump.fetch_all()` handles
-catalogue requests and pagination, and `fetchtranscript.fetch_transcript()` handles
-transcript requests. Catalogue sorting/CSV output uses `write_catalogue_csv()`;
-transcript JSON serialization uses `write_transcript_json()`. The original CLIs
-call these same functions. The job adds baseline handling, merging, manifests,
-validation and atomic publication; it does not reimplement either HTTP client.
+Inputs are a supported show, the application database connection (standard
+`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` variables), an API key
+and a new output directory. Initialize the application database before running.
+The API key comes from `RADIOFRANCE_API_KEY` or an explicit runtime-mounted
+`--api-key-file`; the file takes precedence. Secrets are never written into artifacts.
 
-Inputs: one supported show, its baseline catalogue CSV, an API key supplied via
-`RADIOFRANCE_API_KEY`, and a new output directory. Even the initial run requires
-a baseline (a header-only CSV explicitly requests a full catalogue download).
-Missing files are errors, not implicit instructions for a full backfill.
+One read-only SQL statement reads `MAX(published_ts)`, the show's committed
+row count and episode IDs at that timestamp. The connection closes before API
+requests begin. An empty show uses cutoff zero and downloads from the beginning;
+a database error fails the job and never causes an implicit full download.
+The API request includes the cutoff second, then skips the already-committed
+IDs at that boundary. New episodes sharing that second are retained.
 
-The maximum publication timestamp in the baseline is the exclusive cutoff.
-This differs from the existing DAG, which derives its cutoff from Airflow episode
-events. Wiring the pilot into Airflow will require an explicit decision about
-which component owns that state; this change does not switch the DAG's behavior.
+Only the final database-loading stage commits new episodes. Failed acquisition,
+chunking, embedding or an uncommitted load leaves the cutoff unchanged, so a
+new pipeline run retries from the database's committed state. Successfully
+committed episodes are skipped on the next run. This is incremental acquisition
+by publication timestamp, not reconciliation of backdated episodes or older
+missing transcripts. Per-show execution remains serialized by the pipeline DAG.
 
 Outputs:
 
 ```text
 OUTPUT/
-  baseline.csv                 # exact input snapshot
-  updates.csv                  # only newly fetched episodes
-  SHOW.csv                     # merged cumulative catalogue
-  transcripts/EPISODE_ID.json   # raw JSON for each new episode
-  manifest.json                # show, cutoff, counts, paths
+  episodes.json                # new episode metadata only; [] for no new work
+  transcripts/EPISODE_ID.json   # raw transcript JSON for each new episode
+  manifest.json                # version 2; show, DB cutoff/count, episode count and paths
 ```
 
-No database, S3 or Airflow services are contacted by the command. The catalogue
-module currently imports psycopg2, so the container includes that dependency;
-the functions used here never open a database connection.
+`episodes.json` is a JSON array with the existing catalogue fields. `published_ts`
+is an integer; the other fields are strings. The metadata IDs must match the
+manifest's transcript IDs exactly. Chunk CSVs and embedding NPY files belong to
+later stages and keep their existing formats.
 
-The output directory appears only after all downloads succeed. A transcript 404,
-rate limit or HTTP failure fails the command. Failed staging data is removed;
-retrying repeats acquisition from the unchanged baseline. This first pilot does
-not resume individual transcripts or recover older missing downloads. A successful
-empty update still publishes the catalogue and an empty transcript list.
-The job never overwrites an existing output directory.
-Completed podcast artifact directories use mode `0755` and files `0644` so
-Airflow's different container user can verify them. Staging remains private
-during acquisition, and the API key is never copied into the output directory.
+Publication is atomic. Missing transcripts or changed fixed-sample counts fail
+the job; failed staging directories are removed. Existing completed directories
+are never overwritten. Completed directories use mode 0755 and files 0644 so
+Airflow's separate container user can verify them. No database writes, S3 calls
+or Airflow asset events occur in this job.
 
-## execution
+## Running through Airflow
 
-Use `mecaniques-du-journalisme` for the pilot. Export the API key first;
-if it is stored in the project's existing `.OpenAPIKey` file:
+Follow [Airflow deployment](../airflow/DEPLOYMENT.md). The download child runs on
+`RF_DOCKER_NETWORK` and connects to the application database using
+`RF_DATABASE_HOST`, `RF_DATABASE_PORT` and the privately supplied
+`RF_DATABASE_PASSWORD`. The API-key file is mounted read-only from `.OpenAPIKey`.
+The Airflow container no longer needs a baseline mount.
+
+After upgrading an existing checkout, rebuild the affected images and recreate
+Airflow without deleting the database volume:
 
 ```bash
-export RADIOFRANCE_API_KEY="$(cat .OpenAPIKey)"
+sudo docker build -f download/Dockerfile -t radiofrance-download:pilot .
+sudo docker build -f chunking/Dockerfile -t radiofrance-chunk:pilot .
+sudo docker compose build airflow database-loader
+sudo docker compose up -d --wait --wait-timeout 300 airflow
+```
+
+Download manifests are now version 2. New download runs must be used with the
+updated chunk and database images; old CSV-based download runs are not supported.
+Embedding/chunk output formats and the application schema are unchanged.
+No database migration, re-embedding or volume reset is required.
+
+## Running directly
+
+Set the libpq connection variables for the existing application database, keeping
+the password out of command arguments. For host execution the default Compose
+address is 127.0.0.1:55432. For a container use the Compose network and hostname
+`postgres:5432`.
+
+```bash
+export PGHOST=127.0.0.1 PGPORT=55432 PGUSER=radiofrance PGDATABASE=radiofrance
+read -rsp 'Database password: ' PGPASSWORD; export PGPASSWORD
 venv/airflow/bin/python -m radiofrance.jobs.download \
   --show mecaniques-du-journalisme \
-  --baseline data/mecaniques-du-journalisme.csv \
-  --output-dir data/download-pilot/run-001
+  --api-key-file .OpenAPIKey \
+  --output-dir data/download-pilot/run-new
 ```
 
-The default delay between transcript requests is one second. Keep credentials
-out of command arguments, images, source control and logs. The command deliberately
-does not read the `.OpenAPIKey` file implicitly.
+The default delay between transcript requests is one second. Use
+`--transcript-delay` to change it. `PGPASSWORD` is consumed by libpq; the command
+has no database-credential argument to appear in the process list.
 
-For a runtime-mounted secret, use `--api-key-file /run/secrets/radiofrance-api-key`.
-An explicit key file takes precedence over the environment. The Airflow DAG
-uses this interface so no key value is passed through rendered fields or XCom.
+## Fixed integration sample
 
-## Container execution
+`--episode-selection PATH` selects the committed episode IDs and transcript
+segment counts from a fixture. It requires the selected show to be empty in the
+application database. Metadata still comes from the live API; unavailable IDs or
+changed segment counts fail the run without replacement. GitHub integration uses
+its fresh disposable database and no catalogue CSV files.
 
-The Docker daemon must be accessible to your account. From the repository root:
-
-```bash
-docker build -f download/Dockerfile -t radiofrance-download:pilot .
-mkdir -p data/download-pilot
-docker run --rm --init \
-  --user "$(id -u):$(id -g)" \
-  --env RADIOFRANCE_API_KEY \
-  --mount type=bind,src="$PWD/data/mecaniques-du-journalisme.csv",dst=/input/baseline.csv,readonly \
-  --mount type=bind,src="$PWD/data/download-pilot",dst=/output \
-  radiofrance-download:pilot \
-  --show mecaniques-du-journalisme --baseline /input/baseline.csv --output-dir /output/run-002
-```
-
-The allowlisted Docker build context excludes credentials, models and datasets.
-The runtime uses an unprivileged user; the example uses your UID/GID so
-bind-mounted outputs remain writable. No host ports or model files are needed.
-The Python base image still uses a tag: pin the tested digest before deployment.
-
-## Validation and next steps
+## Validation
 
 ```bash
-venv/airflow/bin/python -m unittest tests.test_download_job -v
-venv/airflow/bin/python -m unittest discover -s airflow/test -p test_download.py -v
 venv/airflow/bin/pyright
+bash ci/run-tests
 ```
 
-The offline test covers cutoff selection, merging, transcript UUID conversion,
-artifact paths, empty updates, destination protection and failure cleanup.
-A live acquisition requires an API key and makes real requests; it is not part
-of offline validation.
-
-The container run has been exercised. Next, start Airflow and its metadata
-database through Docker Compose, then connect this download container. Keep artifacts in explicit directories and serialize catalogue updates per show.
-Later steps add chunking, embedding and transactional loading into PostgreSQL.
-The Radio France database will record processing state; per-episode Airflow assets
-are not part of the target design. Cloud deployment is deferred to a second phase.
+Offline tests cover database failure, empty state, same-timestamp IDs, retries,
+JSON validation, atomic publication, container permissions, the full artifact
+chain, database cutoff advancement on commit and a subsequent no-op download.
+Live API and real-model validation use the manual pipeline-integration workflow.

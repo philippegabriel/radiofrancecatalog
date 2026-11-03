@@ -18,9 +18,6 @@ src/**/__pycache__/**
 !database/sql/
 !database/sql/*.sql
 !database/sql/__init__.py
-!database/sql/catalogue/
-!database/sql/catalogue/*.sql
-!database/sql/catalogue/__init__.py
 !airflow/
 !airflow/Dockerfile
 !airflow/ui_auth.py

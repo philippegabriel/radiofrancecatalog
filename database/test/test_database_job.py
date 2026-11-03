@@ -20,7 +20,7 @@ from radiofrance.jobs.chunk import run_chunking
 import radiofrance.jobs.database as job
 from radiofrance.jobs.embedding import run_embedding, write_json
 from tests import test_embedding_job as fixtures
-from radiofrance.libs.catalogue import FIELDS
+from radiofrance.libs.catalogue import CatalogueRow
 from radiofrance.libs.types import Transcript
 
 
@@ -43,20 +43,16 @@ class DatabaseJobTests(unittest.TestCase):
         download = downloads / name
         download.mkdir(parents=True)
         identity = '11111111-1111-4111-8111-111111111111_5'
-        fields = ['mecaniques-du-journalisme', '2026-10-01T12:00:00+00:00', '1790856000',
-                  text, 'description', 'https://example.test/episode', 'podcast', '', '', identity]
-        for filename in ('catalogue.csv', 'updates.csv'):
-            with (download / filename).open('w', newline='') as stream:
-                writer = csv.writer(stream)
-                writer.writerow(FIELDS)
-                if not empty:
-                    writer.writerow(fields)
+        entry: CatalogueRow = {'show': 'mecaniques-du-journalisme', 'published_iso': '2026-10-01T12:00:00+00:00',
+            'published_ts': 1790856000, 'title': text, 'description': 'description',
+            'web_url': 'https://example.test/episode', 'podcast_title': 'podcast',
+            'podcast_url': '', 'player_url': '', 'id': identity}
+        write_json(download / 'episodes.json', [] if empty else [entry])
         transcript = download / f'{identity}.json'
         write_json(transcript, {'transcript': [{'start': 0.0, 'end': 1.0, 'text': text}]})
-        write_json(download / 'manifest.json', {'version': 1, 'show': 'mecaniques-du-journalisme',
-            'catalogue_episode_count': 0 if empty else 1, 'new_episode_count': 0 if empty else 1,
-            'catalogue': {'path': 'catalogue.csv'},
-            'updates': {'path': 'updates.csv'},
+        write_json(download / 'manifest.json', {'version': 2, 'show': 'mecaniques-du-journalisme',
+            'new_episode_count': 0 if empty else 1,
+            'episodes': {'path': 'episodes.json'},
             'transcripts': [] if empty else [{'episode_id': identity, 'path': transcript.name}]})
         run_chunking(download / 'manifest.json', chunks / name)
         cache = root / f'cache-{name}'
@@ -92,14 +88,11 @@ class DatabaseJobTests(unittest.TestCase):
             rows.append(row)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            baseline = root / 'baseline.csv'
-            with baseline.open('w', newline='') as stream:
-                csv.writer(stream).writerow(FIELDS)
             chosen = root / 'selection.json'
             chosen.write_text(json.dumps(selection))
             download = root / 'downloads/run'
             with patch.object(download_job, 'fetch_all', return_value=iter(rows)), patch.object(download_job, 'fetch_transcript', return_value=transcript):
-                download_job.run_download(selection['show'], baseline, download, 'test', 0, chosen)
+                download_job.run_download(selection['show'], download, 'test', 0, chosen, self.dsn)
             run_chunking(download / 'manifest.json', root / 'chunks/run')
             cache = root / 'cache'
             fixtures.EmbeddingJobTests().model(cache)
@@ -121,6 +114,42 @@ class DatabaseJobTests(unittest.TestCase):
             rejected = subprocess.run(arguments, input=sql, text=True, capture_output=True)
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn('episode without embeddings', rejected.stderr)
+
+    def test_incremental_json_download_advances_only_after_load(self) -> None:
+        """Use real DB state across download, chunk, fake inference, load and a no-op retry."""
+        import radiofrance.jobs.download as download_job
+        from radiofrance.libs.download_state import read_download_state
+        from tests.test_download_job import episode
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job.load(self.fixture(root, 'initial'), self.dsn)
+            show = 'mecaniques-du-journalisme'
+            before = read_download_state(show, self.dsn)
+            timestamp = before['cutoff_timestamp']
+            rows = [episode(before['existing_ids'][0], timestamp),
+                    episode('22222222-2222-4222-8222-222222222222_5', timestamp),
+                    episode('33333333-3333-4333-8333-333333333333_5', timestamp + 100)]
+            for row in rows:
+                row['show'] = show
+            transcript: Transcript = {'transcript': [{'start': 0, 'end': 1, 'text': 'Nouvel épisode.'}]}
+            download = root / 'downloads/delta'
+            with patch.object(download_job, 'fetch_all', return_value=iter(rows)), patch.object(download_job, 'fetch_transcript', return_value=transcript):
+                manifest = download_job.run_download(show, download, 'test', 0, dsn=self.dsn)
+            self.assertEqual(manifest['new_episode_count'], 2)
+            self.assertEqual(read_download_state(show, self.dsn), before)
+            run_chunking(download / 'manifest.json', root / 'chunks/delta')
+            cache = root / 'delta-cache'
+            fixtures.EmbeddingJobTests().model(cache)
+            run_embedding(root / 'chunks/delta/manifest.json', root / 'delta-embedding', cache,
+                          encoder=fixtures.FakeEncoder())
+            job.load(job.prepare(root / 'delta-embedding/manifest.json', root / 'chunks', root / 'downloads'), self.dsn)
+            after = read_download_state(show, self.dsn)
+            self.assertEqual(after['cutoff_timestamp'], timestamp + 100)
+            self.assertEqual(after['episode_count'], 3)
+            with patch.object(download_job, 'fetch_all', return_value=iter(rows[-1:])), patch.object(download_job, 'fetch_transcript') as fetch:
+                result = download_job.run_download(show, root / 'downloads/retry', 'test', 0, dsn=self.dsn)
+                self.assertEqual(result['new_episode_count'], 0)
+                fetch.assert_not_called()
 
     def test_load_repeat_and_configuration_coexistence(self) -> None:
         """Commit a complete run, repeat without duplication and keep model variants separately."""

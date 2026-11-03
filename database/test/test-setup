@@ -48,7 +48,7 @@ if [[ "${RF_VALIDATE_LOADER:-0}" = 1 ]]; then
   cd "$database_dir/.."
   (
     export PGUSER=radiofrance PGDATABASE=radiofrance PGPASSWORD="$RF_DATABASE_PASSWORD"
-    export RF_TEST_DATABASE_DSN='' RF_CATALOGUE_DSN=''
+    export RF_TEST_DATABASE_DSN=''
     venv/airflow/bin/python -m unittest discover -s database/test -p 'test_*.py'
     venv/airflow/bin/python -m unittest discover -s airflow/test -p 'test_*.py'
   )

@@ -61,8 +61,8 @@ def validate_source(path: Path) -> DownloadManifest:
     This function uses local files only and can run in Airflow's preflight task.
     """
     raw: object = json.loads(path.read_text(encoding='utf-8'))
-    if not isinstance(raw, dict) or raw.get('version') != 1 or not isinstance(raw.get('show'), str):
-        raise ValueError('Expected a version-1 download manifest')
+    if not isinstance(raw, dict) or raw.get('version') != 2 or not isinstance(raw.get('show'), str):
+        raise ValueError('Expected a version-2 download manifest')
     if not isinstance(raw.get('transcripts'), list):
         raise ValueError('Expected a transcript list')
     manifest = cast(DownloadManifest, raw)

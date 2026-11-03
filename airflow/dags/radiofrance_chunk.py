@@ -48,7 +48,7 @@ See chunking/README.md for commands. No API key or additional services are neede
 Only transcripts listed in the download manifest are processed. Output is a
 new data/chunk-pilot/airflow-<run-id>/ directory containing per-episode CSVs
 and a versioned manifest. Empty downloads succeed with no CSVs. Inputs and the
-baseline remain unchanged. No embeddings, database imports, cloud calls or asset
+metadata remain unchanged. No embeddings, database imports, cloud calls or asset
 events occur. Trigger a new DAG run to repeat processing; automatic retries are
 disabled and existing outputs are not overwritten. A failed verification alone
 can be cleared and retried without rerunning the chunk container.

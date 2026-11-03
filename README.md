@@ -34,5 +34,11 @@ Trigger `radiofrance_pipeline` to run download → chunk → embedding → datab
 with automatic, explicit artifact handoffs. See [running the complete pipeline](airflow/DEPLOYMENT.md#run-the-complete-pipeline).
 
 [Code validation](ci/README.md) runs Pyright, DAG/configuration checks and the
-maintained test suites on every push and pull request. The complete live pipeline
-integration workflow is the next CI increment.
+maintained test suites on every push and pull request. The manually triggered live pipeline
+integration workflow validates ten fixed episodes end to end.
+
+Downloads use each show's committed PostgreSQL cutoff and publish `episodes.json`
+metadata deltas plus raw transcript JSON. Catalogue CSV baselines and merges are
+no longer part of the pipeline. Chunk CSVs and embedding NPY files remain stage
+artifacts. See the [download contract](download/README.md) for retry semantics,
+container rebuild commands and fixed-sample integration.

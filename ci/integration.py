@@ -1,7 +1,6 @@
 """Prepare and drive a disposable GitHub-hosted Airflow integration environment."""
 
 import argparse
-import csv
 import json
 import os
 from pathlib import Path
@@ -22,8 +21,7 @@ FIXTURE = ROOT / 'ci/fixtures/le-cours-de-l-histoire.json'
 SHOW = 'le-cours-de-l-histoire'
 DAGS = ('radiofrance_download', 'radiofrance_chunk', 'radiofrance_embedding',
         'radiofrance_database', 'radiofrance_pipeline')
-FIELDS = ['show', 'published_iso', 'published_ts', 'title', 'description',
-          'web_url', 'podcast_title', 'podcast_url', 'player_url', 'id']
+
 
 
 class IntegrationSettings(TypedDict):
@@ -47,7 +45,7 @@ class IntegrationSummary(TypedDict):
 
 
 def prepare() -> None:
-    """Create runner-only settings, empty baseline and API-key file; never overwrite an installation."""
+    """Create runner-only settings and an API-key file; the fresh database supplies an empty catalogue."""
     if os.environ.get('GITHUB_ACTIONS') != 'true' or (ROOT / '.env').exists():
         raise ValueError('Integration preparation requires a fresh GitHub Actions checkout without .env')
     key = os.environ.get('RADIOFRANCE_API_KEY', '').strip()
@@ -58,8 +56,6 @@ def prepare() -> None:
         raise ValueError('Integration fixture must contain exactly ten episodes')
     for directory in ('download-pilot', 'chunk-pilot', 'embedding-pilot'):
         (ROOT / 'data' / directory).mkdir(parents=True, exist_ok=True)
-    with (ROOT / 'data' / f'{SHOW}.csv').open('w', newline='') as stream:
-        csv.writer(stream).writerow(FIELDS)
     secret = ROOT / '.OpenAPIKey'
     with secret.open('x') as stream:
         secret.chmod(0o600)

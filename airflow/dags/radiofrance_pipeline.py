@@ -71,13 +71,15 @@ run IDs; this DAG uses the same convention. Metadata XCom contains references on
 
 ## Configuration and running
 Follow airflow/DEPLOYMENT.md and build the four processing images. The API key,
-model cache, baseline, application database and host mounts are unchanged. Enable
+model cache, application database and host mounts are configured through .env. Enable
 this DAG AND all four child DAGs in the UI, then trigger radiofrance_pipeline
 without parameters. A running scheduler and triggerer are required. Deferrable
 waits release worker slots so child tasks can run with the current parallelism.
 RF_SHOW selects the show (default mecaniques-du-journalisme). Optional
-RF_EPISODE_SELECTION enables a fixed integration sample with an empty baseline;
-normal runs retain their existing baseline behavior. No baseline is overwritten.
+RF_EPISODE_SELECTION enables a fixed integration sample for an empty show in the
+application database. Normal downloads read the show's committed database cutoff
+and publish JSON metadata deltas; CSV baselines are not used. The cutoff advances
+only when the final database task successfully commits the run.
 
 ## Outputs and recovery
 Artifacts remain in the normal download-pilot, chunk-pilot and embedding-pilot

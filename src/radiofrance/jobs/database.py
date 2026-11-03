@@ -30,9 +30,7 @@ class Artifact(TypedDict):
 
 
 class CatalogueManifest(DownloadManifest):
-    catalogue: Artifact
-    updates: Artifact
-    catalogue_episode_count: int
+    episodes: Artifact
 
 
 class Episode(TypedDict):
@@ -92,8 +90,7 @@ def prepare(embedding_manifest: Path, chunk_root: Path, download_root: Path) -> 
     download = cast(CatalogueManifest, validate_source(download_path))
     if chunks['show'] != download['show']:
         raise ValueError('Chunk/download lineage mismatch')
-    catalogue = read_rows(contained_file(download_path.parent, download['catalogue']['path']), download['show'])
-    updates = read_rows(contained_file(download_path.parent, download['updates']['path']), download['show'])
+    catalogue = read_rows(contained_file(download_path.parent, download['episodes']['path']), download['show'])
     ids = {row['id'] for row in catalogue}
     for identity in ids:
         if not re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_(0|[1-9][0-9]*)', identity):
@@ -101,8 +98,8 @@ def prepare(embedding_manifest: Path, chunk_root: Path, download_root: Path) -> 
     transcripts = {item['episode_id']: item for item in download['transcripts']}
     chunk_files = {item['episode_id']: item for item in chunks['chunks']}
     embedding_files = {item['episode_id']: item for item in embeddings['embeddings']}
-    if (len(catalogue) != download['catalogue_episode_count'] or set(transcripts) != set(chunk_files)
-            or set(transcripts) != {row['id'] for row in updates} or not set(transcripts) <= ids):
+    if (len(catalogue) != download['new_episode_count'] or set(transcripts) != set(chunk_files)
+            or set(transcripts) != ids):
         raise ValueError('Catalogue/transcript/chunk membership mismatch')
     episodes: list[Episode] = []
     for identity, item in transcripts.items():

@@ -7,7 +7,6 @@ cd "$project_root"
 [[ ! -e .env ]] || { echo '.env already exists; preserve it and use the settings documented in airflow/DEPLOYMENT.md.' >&2; exit 1; }
 [[ -S /var/run/docker.sock ]] || { echo 'Host Docker socket is missing.' >&2; exit 1; }
 [[ -f .OpenAPIKey ]] || { echo 'Expected .OpenAPIKey in the project root.' >&2; exit 1; }
-[[ -f data/mecaniques-du-journalisme.csv ]] || { echo 'Pilot baseline CSV is missing.' >&2; exit 1; }
 [[ "$project_root" != *"'"* && "$project_root" != *$'\n'* ]] || { echo 'Unsupported quoting in project path.' >&2; exit 1; }
 mkdir -p data/download-pilot data/chunk-pilot data/embedding-pilot
 hf_cache_root="${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub}"

@@ -102,7 +102,8 @@ References: [pgvector images](https://github.com/pgvector/pgvector#docker),
 ## Schema and loader — increment 2
 
 The loader reads a completed embedding run and follows its `source_run` names to
-the chunk and download directories. It imports the catalogue, transcripts, chunks
+the chunk and download directories. Download metadata comes from `episodes.json`
+(version-2 download manifests), not CSV catalogues. It imports the new catalogue entries, transcripts, chunks
 and vectors in a single transaction. It does not run models or initialize tables.
 
 ```bash

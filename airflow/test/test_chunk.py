@@ -37,7 +37,7 @@ class LocalChunkTests(unittest.TestCase):
             source = downloads / name
             source.mkdir(parents=True)
             chunks.mkdir()
-            manifest: DownloadManifest = {'version': 1, 'show': 'mecaniques-du-journalisme',
+            manifest: DownloadManifest = {'version': 2, 'show': 'mecaniques-du-journalisme',
                                           'new_episode_count': 0, 'transcripts': []}
             (source / 'manifest.json').write_text(json.dumps(manifest))
             with patch.dict(os.environ, {'RF_PROJECT_ROOT': '/host/project'}), patch.object(dag_module, 'HOST', '/host/project'), patch.object(dag_module, 'DOWNLOADS', downloads), patch.object(dag_module, 'OUTPUTS', chunks):

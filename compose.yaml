@@ -120,7 +120,6 @@ services:
       - airflow-home:/opt/airflow
       # Current containerized pipeline DAGs and their shared helpers.
       - ./airflow/dags:/opt/airflow/dags:ro
-      - ./data/${RF_SHOW:-mecaniques-du-journalisme}.csv:/opt/radiofrance/input/baseline.csv:ro
       - ./data/download-pilot:/opt/radiofrance/output:ro
       - ./data/chunk-pilot:/opt/radiofrance/chunks:ro
       - ./data/embedding-pilot:/opt/radiofrance/embeddings:ro

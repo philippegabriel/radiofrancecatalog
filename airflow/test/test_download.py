@@ -25,10 +25,14 @@ class LocalDownloadTests(unittest.TestCase):
         self.assertIn('--api-key-file', dag_module.download.command)
         self.assertFalse(dag_module.download.mount_tmp_dir)
         self.assertEqual(dag_module.download.retries, 0)
-        self.assertEqual(dag_module.download.environment, {})
+        self.assertEqual(dag_module.download.environment['PGDATABASE'], 'radiofrance')
+        self.assertNotIn('PGPASSWORD', dag_module.download.environment)
+        self.assertIn('PGPASSWORD', dag_module.download._private_environment)
+        self.assertEqual(dag_module.download.network_mode, dag_module.NETWORK)
+        self.assertNotIn('--baseline', dag_module.download.command)
         mounts = {mount['Target']: mount for mount in dag_module.download.mounts}
         self.assertTrue(mounts['/run/secrets/radiofrance-api-key']['ReadOnly'])
-        self.assertTrue(mounts['/input/baseline.csv']['ReadOnly'])
+        self.assertNotIn('/input/baseline.csv', mounts)
         self.assertFalse(mounts['/output']['ReadOnly'])
 
     def test_verification_detects_corruption_and_traversal(self) -> None:
@@ -36,21 +40,29 @@ class LocalDownloadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary) / 'run'
             directory.mkdir()
-            artifact: dag_module.Artifact = {'path': 'catalogue.csv'}
-            (directory / 'baseline.csv').write_bytes(b'csv')
+            artifact: dag_module.Artifact = {'path': 'episodes.json'}
             manifest: dag_module.Manifest = {'show': dag_module.SHOW,
-                                       'updates': artifact, 'catalogue': artifact, 'transcripts': []}
-            (directory / 'catalogue.csv').write_bytes(b'csv')
+                                       'episodes': artifact, 'transcripts': []}
+            (directory / 'episodes.json').write_text('[]')
             path = directory / 'manifest.json'
-            path.write_text(json.dumps(manifest))
+            path.write_text(json.dumps({**manifest, 'version': 2, 'new_episode_count': 0}))
             dag_module.verify_artifacts(directory)
-            (directory / 'catalogue.csv').unlink()
+            (directory / 'episodes.json').unlink()
             with self.assertRaisesRegex(ValueError, 'must be a file'):
                 dag_module.verify_artifacts(directory)
-            artifact['path'] = '../outside.csv'
-            path.write_text(json.dumps(manifest))
+            artifact['path'] = '../outside.json'
+            path.write_text(json.dumps({**manifest, 'version': 2, 'new_episode_count': 0}))
             with self.assertRaisesRegex(ValueError, 'must be a file'):
                 dag_module.verify_artifacts(directory)
+
+    def test_preflight_needs_database_configuration_but_no_baseline(self) -> None:
+        """A configured output mount needs no CSV; fail early on a missing DB password."""
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.dict(os.environ, {'RF_PROJECT_ROOT': '/host/project', 'RF_DATABASE_PASSWORD': 'test'}), patch.object(dag_module, 'HOST', '/host/project'), patch.object(dag_module, 'OUTPUT', Path(temporary)):
+                self.assertTrue(dag_module.prepare_download.function('manual-run').startswith('airflow-'))
+                with patch.dict(os.environ, {'RF_DATABASE_PASSWORD': ''}):
+                    with self.assertRaisesRegex(ValueError, 'RF_DATABASE_PASSWORD'):
+                        dag_module.prepare_download.function('manual-run')
 
     def test_preflight_does_not_accept_missing_configuration(self) -> None:
         """Fail before container creation when the host path was not configured."""

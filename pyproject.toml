@@ -11,7 +11,7 @@ requires-python = ">=3.14"
 dependencies = []
 
 [tool.setuptools]
-packages = ["radiofrance", "radiofrance.jobs", "radiofrance.libs", "radiofrance.sql", "radiofrance.sql.catalogue"]
+packages = ["radiofrance", "radiofrance.jobs", "radiofrance.libs", "radiofrance.sql"]
 
 [tool.setuptools.package-dir]
 radiofrance = "src/radiofrance"
@@ -19,4 +19,3 @@ radiofrance = "src/radiofrance"
 
 [tool.setuptools.package-data]
 "radiofrance.sql" = ["*.sql"]
-"radiofrance.sql.catalogue" = ["*.sql"]

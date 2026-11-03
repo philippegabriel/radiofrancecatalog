@@ -23,7 +23,7 @@ class ChunkJobTests(unittest.TestCase):
         ]}), encoding='utf-8')
         transcripts: list[job.TranscriptArtifact] = [] if empty else [
             {'episode_id': 'episode_5', 'path': path.name}]
-        manifest: job.DownloadManifest = {'version': 1, 'show': 'mecaniques-du-journalisme',
+        manifest: job.DownloadManifest = {'version': 2, 'show': 'mecaniques-du-journalisme',
                                           'new_episode_count': len(transcripts), 'transcripts': transcripts}
         output = root / 'manifest.json'
         output.write_text(json.dumps(manifest), encoding='utf-8')
