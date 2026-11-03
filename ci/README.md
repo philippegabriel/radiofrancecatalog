@@ -57,8 +57,8 @@ AIRFLOW_UI_PASSWORD=ci-only-password docker compose --profile jobs config --quie
 
 Set `PG_BINDIR=/usr/lib/postgresql/17/bin` when selecting PostgreSQL 17 explicitly.
 `ci/run-tests` invokes the same maintained job and database test entry points as
-the GitHub workflow. The older Make-based compact-schema test is not included:
-it targets the superseded schema, which was removed during pipeline cleanup.
+the GitHub workflow. Superseded Make-based loaders and their old-schema tests
+have been removed; validation targets the containerized pipeline.
 
 `ci/check_dags.py` intentionally checks the maintained DAG IDs as well as import
 errors. Add a new DAG to that expected set when intentionally extending the
@@ -125,7 +125,7 @@ into a development environment with `venv/airflow/bin/python -m pip install -e .
 Stage-specific dependencies remain in their existing requirements files; package
 installation alone does not install Airflow, PyTorch or model libraries. CI's
 requirements install this package in editable mode. Containers install a regular
-copy, including the SQL resources maintained in `database/sql`. Catalogue CSV/export
+copy, including the SQL resources maintained in `database/sql`. The current CSV-baseline cutoff
 queries are kept in its `catalogue/` subdirectory and packaged as well.
 
 The job entry points are `python -m radiofrance.jobs.download`, `.chunk`,

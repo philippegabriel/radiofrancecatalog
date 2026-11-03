@@ -24,17 +24,15 @@ pipeline DAG passes exact upstream run references between these stages.
 
 ## Layout
 
-- `dags/`: current DAG definitions and shared `radiofrance_catalogue` helpers.
+- `dags/`: current DAG definitions.
 - `Dockerfile`, `configure`, `DEPLOYMENT.md`: image, host settings and deployment guide.
 - `test/`: checks for the current processing DAGs.
 
 Compose mounts `airflow/dags/` read-only at `/opt/airflow/dags/`.
 
-The older S3 download/transform/registration DAGs, their tests and GitHub workflows
-have been removed. [Code validation](../ci/README.md) now checks the current
-implementation on pushes and pull requests; live pipeline CI is planned separately.
-Existing native launcher/snapshot utilities
-are retained; they are not used by this Compose deployment.
+[Code validation](../ci/README.md) checks the current implementation on pushes
+and pull requests. The manually triggered pipeline integration workflow exercises
+ten fixed episodes through the complete containerized pipeline.
 
 ## Checks
 

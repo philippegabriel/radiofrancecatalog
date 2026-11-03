@@ -2,7 +2,7 @@
 \connect radiofrance
 SET ROLE radiofrance;
 BEGIN;
--- Dedicated pipeline schema; leave the legacy E5 schema.sql unchanged.
+-- Application tables for the containerized catalogue and embedding pipeline.
 CREATE TABLE episode_identity (
  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
  source_uuid uuid NOT NULL, source_suffix integer NOT NULL CHECK(source_suffix >= 0),

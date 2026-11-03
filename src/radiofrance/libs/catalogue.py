@@ -51,7 +51,7 @@ SQL = files('radiofrance.sql.catalogue')
 
 @contextmanager
 def catalogue_session(path: str | Path, show: str) -> Iterator[PostgreSQLCursor]:
-    """Load CSV rows and their export view into a temporary catalogue; roll back on exit."""
+    """Load CSV rows into a temporary catalogue; roll back on exit."""
     rows = read_rows(path, show)
     # An explicit separate DSN prevents using Airflow metadata as scratch space.
     connection = psycopg2.connect(os.environ.get('RF_CATALOGUE_DSN', 'dbname=radiofrance user=pgabriel'))

@@ -48,7 +48,6 @@ class GraphQLConnection(TypedDict, total=False):
 
 
 class GraphQLData(TypedDict, total=False):
-    shows: GraphQLConnection | None
     diffusionsOfShowByUrl: GraphQLConnection | None
 
 
@@ -63,18 +62,3 @@ class EpisodeRow(TypedDict):
     podcast_title: str
     podcast_url: str
     player_url: str
-
-
-class FictionRow(TypedDict):
-    published_iso: str
-    published_ts: str | int
-    title: str
-    description: str
-    web_url: str
-    podcast_title: str
-    podcast_url: str
-    player_url: str
-    podcast_duration: str | int
-    id: str
-    show_title: str
-    show_url: str

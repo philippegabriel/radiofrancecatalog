@@ -1,114 +1,18 @@
-.PHONY: all dump test login resetdb clean reallyclean tr chunks uploadembeds dumpids query query-descriptions
-KEY=$(file < .OpenAPIKey)
-FC_URL := https://www.radiofrance.fr/franceculture/podcasts
-FI_URL := https://www.radiofrance.fr/franceinter/podcasts
-FIPODCASTS := affaires-sensibles
-FCPODCASTS := \
-	lsd-la-serie-documentaire \
-	les-nuits-de-france-culture \
-	les-pieds-sur-terre \
-	le-cours-de-l-histoire \
-	mecaniques-du-journalisme
-GITHUBPAGE := https://philippegabriel.github.io/radiofrancecatalog
-PODCASTS:= $(FIPODCASTS) $(FCPODCASTS)
-CSVS:= $(addsuffix .csv, $(PODCASTS))
-RFCSVS:= $(addsuffix .rf.csv, $(PODCASTS))
-DBS:= $(addsuffix .db, $(PODCASTS))
-CODS:= $(addsuffix .cutOffDate, $(PODCASTS))
-CACHEDDBS := $(addprefix data/,$(DBS))
-CACHEDCSVS := $(addprefix data/,$(CSVS))
-TARGETS:= $(CSVS) $(addsuffix .html, $(PODCASTS))
+# Convenience commands for the current containerized PostgreSQL database.
+# Pipeline orchestration belongs to Airflow, not Make.
+.DEFAULT_GOAL := help
+.PHONY: help login inventory query query-descriptions
 PSQL := psql -h 127.0.0.1 -p 55432 -X -v ON_ERROR_STOP=1 -U radiofrance -d radiofrance
-PYTHON ?= python
-TRANSCRIPT_JSONS := $(wildcard transcripts/*.json)
-TRCDBS := $(patsubst transcripts/%.json,data/transcripts/%.db,$(TRANSCRIPT_JSONS))
-CHUNKCSVS := $(patsubst transcripts/%.json,data/chunks/%.csv,$(TRANSCRIPT_JSONS))
-CHUNKDBS:=$(subst .csv,.db, $(CHUNKCSVS))
-# Import only embedding artifacts that exist; empty transcripts may have none.
-EMBEDCSVS := $(wildcard data/embeddings/*.csv)
-EMBEDBS:=$(subst .csv,.db, $(EMBEDCSVS))
-# Preserve import markers created as intermediate prerequisites.
-.SECONDARY: $(TRCDBS) $(CHUNKDBS) $(EMBEDBS)
-all: $(CACHEDCSVS) $(CACHEDDBS) $(CODS) $(TARGETS)
 
-data/%.csv:
-	mkdir -p data/
-	wget -nc -q $(GITHUBPAGE)/$(notdir $@) -O $@ || touch $@
-
-$(CACHEDDBS): data/%.db: data/%.csv schema.sql importcatalogue.sql
-	mkdir -p data/
-	rm -f $@
-	$(PSQL) -f schema.sql
-	$(PSQL) -f importcatalogue.sql < $<
-	touch $@
-
-%.cutOffDate: data/%.db
-	$(PSQL) --tuples-only -v show=$* -f database/sql/catalogue/cutoffdate.sql -o $@
-
-%.db: %.rf.csv data/%.db importcatalogue.sql
-	$(PSQL) -f importcatalogue.sql < $<
-	touch $@
-
-%.csv: database/sql/catalogue/emitcsv.sql %.db
-	$(PSQL) --csv -v show="$*" -o $@ -f $<
-
-%.html.csv: database/sql/catalogue/emithtml.sql %.db
-	$(PSQL) --csv -v show="$*" -o $@ -f $<
+help:
+	@echo 'Available targets: login, inventory, query, query-descriptions'
+	@echo 'Example: make query QUERY="général de Gaulle pendant la guerre"'
 
 login:
 	$(PSQL)
 
-$(addsuffix .rf.csv,$(FIPODCASTS)): %.rf.csv: %.cutOffDate
-	$(eval since := $(shell cat  $<))
-	@echo fetching $@ since $(since) ...
-	python -m radiofrance.fetch_episodes --api-key $(KEY) --since $(since) --show-url $(FI_URL)/$(@:.rf.csv=) --out $@
-
-$(addsuffix .rf.csv,$(FCPODCASTS)): %.rf.csv: %.cutOffDate
-	$(eval since := $(shell cat $<))
-	@echo fetching $@ since $(since) ...
-	python -m radiofrance.fetch_episodes --api-key $(KEY) --since $(since) --show-url $(FC_URL)/$(@:.rf.csv=) --out $@
-
-%.html: %.html.csv
-	echo '<link rel="stylesheet" href="index.css">' > $@
-	echo '<img src="Logo_Radio_France.svg.webp" alt="Radio France">' >> $@
-	python csv2html.py < $< >> $@
-
-data/transcripts/%.db: transcripts/%.json inserttranscript.sql schema.sql
-	@mkdir -p $(@D)
-	@rm -f $@
-	RF_TRANSCRIPT_JSON="$<" $(PSQL) -v episode_id=$* -f inserttranscript.sql
-	@touch $@
-
-data/chunks/%.csv: transcripts/%.json src/radiofrance/chunk_json_to_csv.py src/radiofrance/libs/transcript_json.py src/radiofrance/libs/types.py
-	@mkdir -p $(dir $@)
-	$(PYTHON) -m radiofrance.chunk_json_to_csv $< > $@
-
-data/chunks/%.db: data/chunks/%.csv insertchunks.sql data/transcripts/%.db
-	cat $< | $(PSQL) \
-	    -v episode_id=$* \
-	    -f insertchunks.sql
-	@touch $@
-
-data/embeddings/%.db: data/embeddings/%.csv insertembeddings.sql data/chunks/%.db
-	cat $< | $(PSQL) \
-	    -v episode_id=$* \
-	    -f insertembeddings.sql
-	@touch $@
-
-
-tr: $(TRCDBS)
-	@echo transcripts uploaded
-chunks: $(CHUNKCSVS) $(CHUNKDBS)
-	@echo chunks uploaded 
-uploadembeds: $(EMBEDBS)
-	echo uploaded all embeddings
-dumpids:
-	$(PSQL) -At -c "SELECT id FROM rf_external WHERE show = 'affaires-sensibles';" > affaires-sensibles.ids.csv
-	$(PSQL) -At -c "SELECT id FROM rf_external WHERE show = 'le-cours-de-l-histoire';" > le-cours-de-l-histoire.ids.csv
-	$(PSQL) -At -c "SELECT id FROM rf_external WHERE show = 'les-nuits-de-france-culture';" > les-nuits-de-france-culture.ids.csv
-	$(PSQL) -At -c "SELECT id FROM rf_external WHERE show = 'les-pieds-sur-terre';" > les-pieds-sur-terre.ids.csv
-	$(PSQL) -At -c "SELECT id FROM rf_external WHERE show = 'lsd-la-serie-documentaire';" > lsd-la-serie-documentaire.ids.csv
-	$(PSQL) -At -c "SELECT id FROM rf_external WHERE show = 'mecaniques-du-journalisme';" > mecaniques-du-journalisme.ids.csv
+inventory:
+	$(PSQL) -f inventory.sql
 
 # Override with make query QUERY="your question" QUERY_PYTHON=/path/to/python.
 QUERY ?= général de Gaulle pendant la guerre
@@ -118,14 +22,3 @@ query-descriptions: QUERY_DESCRIPTIONS = true
 query query-descriptions:
 	@queryvector=$$(PYTHONPATH="$(CURDIR)/src$${PYTHONPATH:+:$$PYTHONPATH}" $(QUERY_PYTHON) query_to_embedding.py "$(QUERY)") && \
 	    $(PSQL) -v descriptions="$(QUERY_DESCRIPTIONS)" -v queryvector="$$queryvector" -f query.sql
-
-test:
-	$(PSQL) < inventory.sql
-
-resetdb:
-	$(PSQL) -f droptables.sql
-	rm -f $(DBS) $(CACHEDDBS) data/transcripts/*.db data/chunks/*.db data/embeddings/*.db
-clean: resetdb
-	rm -rf $(TARGETS) $(RFCSVS) $(CSVS) $(CODS) 
-reallyclean: clean
-	rm -rf $(CACHEDCSVS)
