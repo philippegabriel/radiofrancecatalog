@@ -15,6 +15,7 @@ from psycopg2.extensions import cursor as Cursor
 
 from radiofrance.jobs.chunk import ChunkManifest, DownloadManifest, contained_file, validate_source, verify_output as verify_chunks
 from radiofrance.jobs.embedding import EmbeddingManifest, EmbeddingRow, read_vectors, verify_output as verify_embeddings
+from radiofrance.libs.storage import artifact_root
 from radiofrance.libs.types import TranscriptSegment
 from radiofrance.libs.transcript_json import read_segments
 
@@ -70,27 +71,30 @@ def execute(cursor: Cursor, name: str, parameters: tuple[object, ...] = ()) -> N
 
 def source_run(root: Path, name: str) -> Path:
     """Resolve only a single run-directory basename inside its explicit artifact root."""
-    if not re.fullmatch(r'[A-Za-z0-9_-]+', name):
+    if not re.fullmatch(r'[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*', name):
         raise ValueError('Source run must be a directory basename')
     return contained_file(root, f'{name}/manifest.json')
 
 
 def prepare(embedding_manifest: Path, chunk_root: Path, download_root: Path) -> Prepared:
     """Read and validate the full lineage, catalogue, chunk text and vectors without DB access."""
+    embedding_manifest, chunk_root, download_root = (
+        path.resolve() for path in (embedding_manifest, chunk_root, download_root))
     if embedding_manifest.name != 'manifest.json':
         raise ValueError('Expected embedding manifest.json')
-    embedding_run = embedding_manifest.parent.name
+    embedding_run = (str(embedding_manifest.parent.relative_to(artifact_root(embedding_manifest.parent)))
+        if artifact_root(embedding_manifest.parent) != embedding_manifest.parent else embedding_manifest.parent.name)
     embeddings = verify_embeddings(embedding_manifest.parent)
     chunk_path = source_run(chunk_root, embeddings['source_run'])
     chunk_run = chunk_path.parent.name
     chunks = verify_chunks(chunk_path.parent)
     verify_embeddings(embedding_manifest.parent, chunk_path)
     download_path = source_run(download_root, chunks['source_run'])
-    download_run = download_path.parent.name
+    download_run = chunks['source_run'] if chunks.get('artifact_root') else download_path.parent.name
     download = cast(CatalogueManifest, validate_source(download_path))
     if chunks['show'] != download['show']:
         raise ValueError('Chunk/download lineage mismatch')
-    catalogue = read_rows(contained_file(download_path.parent, download['episodes']['path']), download['show'])
+    catalogue = read_rows(contained_file(artifact_root(download_path.parent), download['episodes']['path']), download['show'])
     ids = {row['id'] for row in catalogue}
     for identity in ids:
         if not re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_(0|[1-9][0-9]*)', identity):
@@ -103,10 +107,10 @@ def prepare(embedding_manifest: Path, chunk_root: Path, download_root: Path) -> 
         raise ValueError('Catalogue/transcript/chunk membership mismatch')
     episodes: list[Episode] = []
     for identity, item in transcripts.items():
-        transcript_path = contained_file(download_path.parent, item['path'])
+        transcript_path = contained_file(artifact_root(download_path.parent), item['path'])
         chunk_item, embedding_item = chunk_files[identity], embedding_files[identity]
-        chunk_file = contained_file(chunk_path.parent, chunk_item['path'])
-        embedding_file = contained_file(embedding_manifest.parent, embedding_item['path'])
+        chunk_file = contained_file(artifact_root(chunk_path.parent), chunk_item['path'])
+        embedding_file = contained_file(artifact_root(embedding_manifest.parent), embedding_item['path'])
         segments = read_segments(transcript_path)
         if any(not math.isfinite(s[key]) for s in segments for key in ('start', 'end')):
             raise ValueError('Nonfinite transcript time')
@@ -290,8 +294,8 @@ def main() -> None:
     """Load a selected manifest using environment-only DB credentials."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--embedding-manifest', type=Path, required=True)
-    parser.add_argument('--chunk-root', type=Path, default=Path('data/chunk-pilot'))
-    parser.add_argument('--download-root', type=Path, default=Path('data/download-pilot'))
+    parser.add_argument('--chunk-root', type=Path, default=Path('data/chunks/segment-characters-v1-1000-300/runs'))
+    parser.add_argument('--download-root', type=Path, default=Path('data'))
     parser.add_argument('--verify-only', action='store_true', help='Read-only verification of an already committed import')
     args = parser.parse_args()
     dsn = os.environ.get('RF_DATABASE_DSN', '')

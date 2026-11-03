@@ -12,9 +12,9 @@ context; the episode IDs define membership.
 
 Each entry records the observed segment count. Missing episodes or changed
 segment counts fail the integration run rather than selecting replacements.
-The fixture contains no transcript text, model weights or credentials. Raw
-transcripts downloaded while checking the selection remain in the Git-ignored
-`data/download-pilot/integration-selection/` directory.
+The fixture contains no transcript text, model weights or credentials. Validation
+transcripts from the original selection were removed during data cleanup. Current
+integration runs write transcripts into the shared corpus described in docs/storage.md.
 
 The integration workflow consumes this selection and verifies that
 all ten IDs complete the pipeline. The existing code-validation workflow remains

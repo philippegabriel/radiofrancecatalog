@@ -13,6 +13,7 @@ from airflow.providers.docker.operators.docker import DockerOperator
 from docker.types import Mount
 from psycopg2.extensions import make_dsn
 
+from radiofrance.libs.storage import CHUNK_DIRECTORY, EMBEDDING_DIRECTORY
 from radiofrance.jobs.database import Prepared, prepare, verify_database as verify_import
 from radiofrance.jobs.chunk import contained_file
 
@@ -22,9 +23,9 @@ class DatabaseRun(TypedDict):
 
 
 HOST = os.environ.get('RF_PROJECT_ROOT', '')
-DOWNLOADS = Path('/opt/radiofrance/output')
-CHUNKS = Path('/opt/radiofrance/chunks')
-EMBEDDINGS = Path('/opt/radiofrance/embeddings')
+DOWNLOADS = Path('/opt/radiofrance/data/runs')
+CHUNKS = Path('/opt/radiofrance/data') / CHUNK_DIRECTORY / 'runs'
+EMBEDDINGS = Path('/opt/radiofrance/data') / EMBEDDING_DIRECTORY / 'runs'
 NETWORK = os.environ.get('RF_DOCKER_NETWORK', 'radiofrance_default')
 DATABASE_ENV = {'PGHOST': os.environ.get('RF_DATABASE_HOST', 'postgres'),
     'PGPORT': os.environ.get('RF_DATABASE_PORT', '5432'), 'PGDATABASE': 'radiofrance', 'PGUSER': 'radiofrance'}
@@ -33,7 +34,7 @@ DATABASE_ENV = {'PGHOST': os.environ.get('RF_DATABASE_HOST', 'postgres'),
 def selected_run(state: DatabaseRun) -> Prepared:
     """Revalidate the selected file chain and reject a manifest changed since preflight."""
     manifest = contained_file(EMBEDDINGS, f"{state['embedding_run']}/manifest.json")
-    prepared = prepare(manifest, CHUNKS, DOWNLOADS)
+    prepared = prepare(manifest, CHUNKS, DOWNLOADS.parent if DOWNLOADS.name == "runs" else DOWNLOADS)
     return prepared
 
 
@@ -41,39 +42,28 @@ with DAG(
     dag_id='radiofrance_database',
     description='Load a selected embedding run transactionally and verify its committed database records.',
     doc_md="""
-## Purpose and execution
-Manually load one completed embedding run and its exact download/chunk ancestors.
-`prepare_load` validates artifacts and configuration and returns only the selected
-folder and run name. `load_database` starts the database-loader image on
-the Compose network. It reads the selected manifest and commits the import in
-one transaction. `verify_database` independently checks the completion record,
-configuration, catalogue membership, per-episode counts
-using a read-only repeatable-read transaction. No models or downloads are run.
+## Purpose and flow
+Standalone database-load recovery stage. Validate a selected embedding manifest
+and its download/chunk lineage, load the episode set transactionally, then independently
+verify committed records. For a complete run, use the show selection form in
+radiofrance_pipeline instead.
 
 ## Configuration and running
-Follow database/README.md: initialize PostgreSQL through the first-start scripts,
-build radiofrance-database:pilot and recreate the Airflow service. The Compose
-setup provides RF_PROJECT_ROOT, RF_DOCKER_NETWORK, RF_DATABASE_HOST/PORT and
-RF_DATABASE_PASSWORD. The host socket launches a sibling container; all three
-artifact roots are mounted read-only. Only the radiofrance application role is
-used. The password is passed through the operator's private environment, never
-XCom or command arguments. No Airflow metadata credentials reach the loader.
-Trigger with `embedding_run`, a directory basename under data/embedding-pilot,
-for example airflow-<run-id> or a manually generated run name. Ancestor run
-folders must still exist. There is no automatic selection of the newest run.
+Follow database/README.md. Build radiofrance-database:dev; Compose supplies the
+application PostgreSQL host, network and private password. Supply embedding_run as
+the UTC timestamp under the configured embedding corpus's runs directory. All data
+files are mounted read-only. Only application credentials reach the loader.
 
 ## Results and recovery
-Database changes and the import_run completion record commit together. No output
-files are created. Repeating the same import is safe and verifies existing records.
-Failures roll back uncommitted writes. If loading committed but verification failed,
-clear verification alone or trigger the same selected run again. No data reset,
-new artifact directory, schema update or re-embedding is required. Automatic retries
-are disabled for this manually operated pilot. Database counts are scoped to the
-selected run and configuration, not global totals across all imported shows/models.
+The selected manifests explicitly identify shared transcripts, chunk CSVs and NPY
+matrices; filesystem directory scans never select work. Database changes and import
+completion commit together. Repeating an import verifies the existing records.
+Failures roll back uncommitted writes; if verification fails after commit, retry
+verification alone or reload the same timestamp. No schema changes are required.
 """,
     schedule=None, catchup=False, max_active_runs=1, default_args={'retries': 0},
     params=ParamsDict({'embedding_run': Param('', type='string',
-        description='Completed directory under data/embedding-pilot, containing manifest.json')}),
+        description='Standalone recovery: UTC timestamp of a completed embedding stage; use radiofrance_pipeline for a full run')}),
     tags=['radiofrance', 'database'],
 ) as dag:
     @task(multiple_outputs=False)
@@ -92,7 +82,7 @@ selected run and configuration, not global totals across all imported shows/mode
         if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,150}', name):
             raise ValueError('embedding_run must be a single run directory basename')
         manifest = contained_file(EMBEDDINGS, f'{name}/manifest.json')
-        prepared = prepare(manifest, CHUNKS, DOWNLOADS)
+        prepared = prepare(manifest, CHUNKS, DOWNLOADS.parent if DOWNLOADS.name == "runs" else DOWNLOADS)
         return {'embedding_run': name}
 
     @task
@@ -118,13 +108,11 @@ selected run and configuration, not global totals across all imported shows/mode
 
     state = prepare_load()  # pyright: ignore[reportCallIssue]
     load_database = DockerOperator(
-        task_id='load_database', image='radiofrance-database:pilot',
+        task_id='load_database', image='radiofrance-database:dev',
         docker_url='unix://var/run/docker.sock', api_version='auto',
-        command=['--embedding-manifest', "/input/embeddings/{{ ti.xcom_pull(task_ids='prepare_load')['embedding_run'] }}/manifest.json",
-            '--chunk-root', '/input/chunks', '--download-root', '/input/downloads'],
-        mounts=[Mount('/input/downloads', f'{HOST or "/not-configured"}/data/download-pilot', type='bind', read_only=True),
-            Mount('/input/chunks', f'{HOST or "/not-configured"}/data/chunk-pilot', type='bind', read_only=True),
-            Mount('/input/embeddings', f'{HOST or "/not-configured"}/data/embedding-pilot', type='bind', read_only=True)],
+        command=['--embedding-manifest', f"/data/{EMBEDDING_DIRECTORY}/runs/{{{{ ti.xcom_pull(task_ids='prepare_load')['embedding_run'] }}}}/manifest.json",
+            '--chunk-root', f'/data/{CHUNK_DIRECTORY}/runs', '--download-root', '/data'],
+        mounts=[Mount('/data', f'{HOST or "/not-configured"}/data', type='bind', read_only=True)],
         environment=DATABASE_ENV,
         private_environment={'PGPASSWORD': os.environ.get('RF_DATABASE_PASSWORD', '')},
         user=f"{os.environ.get('RF_UID', '1000')}:{os.environ.get('RF_GID', '1000')}",

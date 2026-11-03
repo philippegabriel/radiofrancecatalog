@@ -18,7 +18,7 @@ def main() -> None:
             print(f'{path}:\n{error}', file=sys.stderr)
         raise SystemExit('DAG imports failed')
     expected = {'radiofrance_smoke', 'radiofrance_download', 'radiofrance_chunk',
-        'radiofrance_embedding', 'radiofrance_database', 'radiofrance_pipeline'}
+        'radiofrance_embedding', 'radiofrance_database', 'radiofrance_pipeline', 'process_episodes'}
     if set(bag.dags) != expected:
         raise SystemExit(f'Unexpected DAG set: {sorted(bag.dags)}; expected {sorted(expected)}')
     print(f'Parsed {len(bag.dags)} maintained DAGs successfully')

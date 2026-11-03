@@ -21,6 +21,7 @@ import radiofrance.jobs.database as job
 from radiofrance.jobs.embedding import run_embedding, write_json
 from tests import test_embedding_job as fixtures
 from radiofrance.libs.catalogue import CatalogueRow
+from radiofrance.libs.storage import CHUNK_DIRECTORY
 from radiofrance.libs.types import Transcript
 
 
@@ -114,6 +115,47 @@ class DatabaseJobTests(unittest.TestCase):
             rejected = subprocess.run(arguments, input=sql, text=True, capture_output=True)
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn('episode without embeddings', rejected.stderr)
+
+    def test_shared_corpus_reuse_and_database_lineage(self) -> None:
+        """Repeat unfinished acquisition without downloading/embedding twice, then load exact shared lineage."""
+        import radiofrance.jobs.download as download_job
+        from radiofrance.libs.storage import CHUNK_DIRECTORY, EMBEDDING_DIRECTORY
+        from tests.test_download_job import episode
+        identity = '11111111-1111-4111-8111-111111111111_5'
+        row = episode(identity, 100)
+        row['show'] = 'new-show'
+        transcript: Transcript = {'transcript': [{'start': 0, 'end': 1, 'text': 'Texte partagé.'}]}
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory) / 'data'
+            cache = Path(directory) / 'cache'
+            fixtures.EmbeddingJobTests().model(cache)
+            outputs: list[Path] = []
+            for index in range(2):
+                name = f'2026-11-03_14-30-0{index}-000000Z'
+                download = data / 'runs' / name / 'download'
+                with patch.object(download_job, 'fetch_all', return_value=iter([row])), patch.object(download_job, 'fetch_transcript', return_value=transcript) as fetch:
+                    download_job.run_download(row['show'], download, 'test', 0, dsn=self.dsn, data_root=data,
+                        show_url='https://www.radiofrance.fr/franceculture/podcasts/new-show')
+                    self.assertEqual(fetch.call_count, 1 if index == 0 else 0)
+                chunk = data / CHUNK_DIRECTORY / 'runs' / name
+                run_chunking(download / 'manifest.json', chunk, data_root=data)
+                output = data / EMBEDDING_DIRECTORY / 'runs' / name
+                encoder = fixtures.FakeEncoder()
+                with patch.object(encoder, 'encode', wraps=encoder.encode) as encode:
+                    run_embedding(chunk / 'manifest.json', output, cache, encoder=encoder, data_root=data)
+                    self.assertEqual(encode.call_count, 1 if index == 0 else 0)
+                outputs.append(output)
+                self.assertEqual(len(list(download.iterdir())), 2)
+                self.assertEqual([p.name for p in chunk.iterdir()], ['manifest.json'])
+                self.assertEqual([p.name for p in output.iterdir()], ['manifest.json'])
+            self.assertEqual(len(list((data / 'transcripts').glob('*.json'))), 1)
+            self.assertEqual(len(list((data / CHUNK_DIRECTORY).glob('*.csv'))), 1)
+            self.assertEqual(len(list((data / EMBEDDING_DIRECTORY).glob('*.npy'))), 1)
+            for output in outputs:
+                prepared = job.prepare(output / 'manifest.json', data / CHUNK_DIRECTORY / 'runs', data)
+                job.load(prepared, self.dsn)
+                job.verify_database(prepared, self.dsn)
+            self.assertEqual(self.counts(), (2, 1, 1))
 
     def test_incremental_json_download_advances_only_after_load(self) -> None:
         """Use real DB state across download, chunk, fake inference, load and a no-op retry."""
@@ -294,15 +336,15 @@ class DatabaseJobTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'text/timestamps'):
                 job.prepare(embedding_path, root / 'chunks', root / 'downloads')
 
-    @unittest.skipUnless(os.environ.get('RF_TEST_PILOT_MANIFEST'), 'optional representative pilot')
-    def test_representative_pilot(self) -> None:
+    @unittest.skipUnless(os.environ.get('RF_TEST_EMBEDDING_MANIFEST'), 'optional representative sample')
+    def test_representative_sample(self) -> None:
         """Load actual previously generated vectors without downloading or running an encoder."""
-        prepared = job.prepare(Path(os.environ['RF_TEST_PILOT_MANIFEST']), Path('data/chunk-pilot'), Path('data/download-pilot'))
+        prepared = job.prepare(Path(os.environ['RF_TEST_EMBEDDING_MANIFEST']), Path('data') / CHUNK_DIRECTORY / 'runs', Path('data'))
         result = job.load(prepared, self.dsn)
         self.assertEqual(self.counts(), (1, len(prepared['catalogue']), prepared['embeddings']['chunk_count']))
         self.assertTrue(job.load(prepared, self.dsn)['already_imported'])
         self.assertEqual(job.verify_database(prepared, self.dsn)['chunk_count'], prepared['embeddings']['chunk_count'])
-        print('Representative pilot:', json.dumps(result))
+        print('Representative sample:', json.dumps(result))
 
 
 if __name__ == '__main__':

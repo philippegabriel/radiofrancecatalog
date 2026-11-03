@@ -8,7 +8,7 @@ cd "$project_root"
 [[ -S /var/run/docker.sock ]] || { echo 'Host Docker socket is missing.' >&2; exit 1; }
 [[ -f .OpenAPIKey ]] || { echo 'Expected .OpenAPIKey in the project root.' >&2; exit 1; }
 [[ "$project_root" != *"'"* && "$project_root" != *$'\n'* ]] || { echo 'Unsupported quoting in project path.' >&2; exit 1; }
-mkdir -p data/download-pilot data/chunk-pilot data/embedding-pilot
+mkdir -p data/runs data/transcripts data/chunks/segment-characters-v1-1000-300/runs data/embeddings/embeddinggemma2-fp32-256/914f7f89142e33e77833254d9c9b90c3cef7303b/segment-characters-v1-1000-300/runs data/catalogue
 hf_cache_root="${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub}"
 [[ "$hf_cache_root" = /* && "$hf_cache_root" != *"'"* && "$hf_cache_root" != *$'\n'* ]] || { echo 'Hugging Face cache must be an absolute, safely quoted path.' >&2; exit 1; }
 umask 077

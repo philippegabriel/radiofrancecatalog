@@ -43,9 +43,9 @@ jobs:
           hf download google/embeddinggemma-2 --revision 914f7f89142e33e77833254d9c9b90c3cef7303b
       - name: Build job and Airflow images
         run: |
-          docker build -f download/Dockerfile -t radiofrance-download:pilot .
-          docker build -f chunking/Dockerfile -t radiofrance-chunk:pilot .
-          docker build -f embedding/Dockerfile -t radiofrance-embedding:pilot .
+          docker build -f download/Dockerfile -t radiofrance-download:dev .
+          docker build -f chunking/Dockerfile -t radiofrance-chunk:dev .
+          docker build -f embedding/Dockerfile -t radiofrance-embedding:dev .
           docker compose build airflow database-loader
       - name: Start PostgreSQL and Airflow
         run: docker compose up -d --wait --wait-timeout 600

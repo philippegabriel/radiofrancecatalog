@@ -19,7 +19,7 @@ runs for the same Git ref. There are no branch or path filters.
 Pyright. The test job installs no embedding runtime. Tests use deterministic
 vectors and temporary transcript/catalogue fixtures; they need no Radio France
 API key, Hugging Face token, model download or existing artifact directories.
-The optional representative-pilot test is skipped because generated pilot data
+The optional representative-sample test is skipped because generated sample data
 is not committed. Model inference and the complete live pipeline belong to the
 separate integration workflow described below.
 
@@ -135,3 +135,14 @@ fetch commands are `python -m radiofrance.fetch_episodes` and
 
 After source changes, rebuild the affected processing images and the Airflow image;
 Compose no longer mounts individual processing modules into Airflow.
+
+The full integration pipeline also exports the HTML catalogue after database
+verification. CI checks the index link, the catalogue count manifest, and all ten
+fixed episode IDs in the show page. The generated site is included in the uploaded
+diagnostics under `catalogue/`.
+
+Integration explicitly selects the fixed fixture show in the parent trigger form
+and enables the single-show coordinator as well as all four stages. Fresh database
+initialization includes the `"show"` registry. Local database tests cover URL
+validation, registration idempotence, enabled selection, transaction rollback and
+acquisition/loading for a show absent from the former hard-coded list.

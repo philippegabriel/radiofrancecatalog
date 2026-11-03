@@ -44,7 +44,7 @@ assets are not needed for the target design.
 6. Run [code validation](../ci/README.md) on pushes and pull requests. Full
    containerized pipeline integration in GitHub Actions remains a separate step.
 
-The [download pilot](../download/README.md) already supports files and
+The [download sample](../download/README.md) already supports files and
 container execution. Its manifest records artifact paths and counts. Keep that
 boundary and publish completion only after successful processing. Downloads read
 the committed per-show PostgreSQL cutoff and publish JSON metadata deltas. Only successful final loading advances that cutoff.

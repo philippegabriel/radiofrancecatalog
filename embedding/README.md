@@ -1,3 +1,5 @@
+For the current directory layout and upgrade commands, see [pipeline storage](../docs/storage.md).
+
 # EmbeddingGemma 2 stage
 
 Generate embeddings from a completed chunk run using SentenceTransformers,
@@ -28,16 +30,15 @@ model files cause a clear failure. Processing does not download anything.
 From the project root:
 
 ```bash
-sudo docker build -f embedding/Dockerfile -t radiofrance-embedding:pilot .
-mkdir -p data/embedding-pilot
+sudo docker build -f embedding/Dockerfile -t radiofrance-embedding:dev .
+# Create shared corpus directories first; see docs/storage.md.
 sudo docker run --rm --init --network none --memory 4g \
   --user "$(id -u):$(id -g)" \
   --mount type=bind,src="$HOME/.cache/huggingface/hub",dst=/home/embedding/.cache/huggingface/hub,readonly \
-  --mount type=bind,src="$PWD/data/chunk-pilot",dst=/input,readonly \
-  --mount type=bind,src="$PWD/data/embedding-pilot",dst=/output \
-  radiofrance-embedding:pilot \
-  --chunk-manifest /input/airflow-c81b47eb5d4e7866014e7813bd2cc93959a6e5b2d2849f63539a60733e56c5ef/manifest.json \
-  --output-dir /output/run-001
+  --mount type=bind,src="$PWD/data",dst=/data \
+  radiofrance-embedding:dev --data-root /data \
+  --chunk-manifest /data/chunks/segment-characters-v1-1000-300/runs/TIMESTAMP/manifest.json \
+  --output-dir /data/embeddings/embeddinggemma2-fp32-256/914f7f89142e33e77833254d9c9b90c3cef7303b/segment-characters-v1-1000-300/runs/NEW_TIMESTAMP
 ```
 
 If your host cache is elsewhere, change the mount source. Mount the entire `hub`
@@ -70,15 +71,15 @@ The cache is mounted in the processing container only.
 Enable and trigger `radiofrance_embedding` with a completed chunk run:
 
 ```json
-{"chunk_run": "airflow-c81b47eb5d4e7866014e7813bd2cc93959a6e5b2d2849f63539a60733e56c5ef"}
+{"chunk_run": "2026-11-03_14-30-00-000000Z"}
 ```
 
 The flow is `prepare_embedding → embed → verify_embeddings`. Preparation checks
 the selected chunk artifacts and cache-path configuration. The worker verifies
 the pinned model cache and performs inference. Airflow then verifies the output,
 source provenance and recorded model inventory. The worker has no network, uses
-read-only source/cache mounts, and has a writable output mount and 4 GiB limit.
-Outputs appear in `data/embedding-pilot/airflow-<run-id>/`.
+a read-only model cache and a writable shared data mount and 4 GiB limit.
+NPY files accumulate in the model/revision/strategy corpus; only completion manifests are per run. See [storage](../docs/storage.md).
 
 ## Outputs and retries
 
@@ -92,7 +93,8 @@ runtime versions and embedding configuration. No model-file inventory is created
 
 Documents use `title: none | text: `. Future search queries must use the same
 model, dimensions and normalization with `task: search result | query: `.
-Outputs are verified and published atomically. Failed processing removes staging;
+Corpus matrices are published individually and a completion manifest is written only
+after success. Failed processing removes staging, retaining reusable corpus files;
 completed output is never overwritten. Retry processing with a fresh output or
 DAG run. A verification task alone may be cleared and retried. Empty chunk runs
 publish without loading the model runtime, but still require a valid cached model.
@@ -109,9 +111,7 @@ Offline tests cover publication, provenance, invalid vectors and both repository
 and shared Hub blob links. Real-model inference is checked separately. Docker
 image execution must also be checked on a host with Docker daemon access.
 
-The standard-cache native integration run processed all 253 pilot chunks across
+The standard-cache native integration run processed all 253 sample chunks across
 12 episodes offline. Its vectors exactly matched the previous FP32 output.
-Evidence is in the Git-ignored `data/embedding-pilot/hf-cache-validation-001/`
-and sibling validation JSON/log. The combined job/DAG suite passed 19 tests;
-Pyright, Compose configuration and configure-script syntax checks passed.
-Docker execution was not checked because daemon access was unavailable.
+The generated evidence was removed during data cleanup. These figures describe
+that historical native validation; Docker execution was not checked at that time.

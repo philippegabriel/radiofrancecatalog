@@ -22,7 +22,7 @@ services:
     restart: unless-stopped
 
   database-loader:
-    image: radiofrance-database:pilot
+    image: radiofrance-database:dev
     build:
       context: .
       dockerfile: database/Dockerfile
@@ -37,9 +37,7 @@ services:
       PGUSER: radiofrance
       PGPASSWORD: ${RF_DATABASE_PASSWORD:-radiofrance-dev}
     volumes:
-      - ./data/download-pilot:/input/downloads:ro
-      - ./data/chunk-pilot:/input/chunks:ro
-      - ./data/embedding-pilot:/input/embeddings:ro
+      - ./data:/data:ro
     restart: "no"
 
   mcp:
@@ -120,9 +118,7 @@ services:
       - airflow-home:/opt/airflow
       # Current containerized pipeline DAGs and their shared helpers.
       - ./airflow/dags:/opt/airflow/dags:ro
-      - ./data/download-pilot:/opt/radiofrance/output:ro
-      - ./data/chunk-pilot:/opt/radiofrance/chunks:ro
-      - ./data/embedding-pilot:/opt/radiofrance/embeddings:ro
+      - ./data:/opt/radiofrance/data:ro
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test:

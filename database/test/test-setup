@@ -25,6 +25,10 @@ export RF_DATABASE_PASSWORD="test'quoted-password"
 for script in "$database_dir"/init/*.sql; do
   psql -X -v ON_ERROR_STOP=1 -d airflow -f "$script" >> "$test_root/first.log"
 done
+# The additive registry update must also work with an existing populated volume.
+psql -X -v ON_ERROR_STOP=1 -d radiofrance -c "UPDATE \"show\" SET enabled=false WHERE slug='affaires-sensibles'" > /dev/null
+psql -X -v ON_ERROR_STOP=1 -d radiofrance -f "$database_dir/init/40-shows.sql" >> "$test_root/first.log"
+[[ "$(psql -XAt -d radiofrance -c "SELECT NOT enabled FROM \"show\" WHERE slug='affaires-sensibles'")" = t ]]
 psql -X -v ON_ERROR_STOP=1 -d airflow -c 'CREATE TABLE setup_preservation_probe (id integer); INSERT INTO setup_preservation_probe VALUES (42)' > /dev/null
 "$pg_bin/pg_ctl" -D "$test_root/data" -m fast -w restart > /dev/null
 [[ "$(psql -XAt -d airflow -c 'SELECT id FROM setup_preservation_probe')" = 42 ]]
@@ -43,6 +47,7 @@ if PGUSER=radiofrance PGPASSWORD="$RF_DATABASE_PASSWORD" psql -X -d airflow -c '
   exit 1
 fi
 [[ "$(psql -XAt -d radiofrance -c "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND column_name LIKE '%sha256%'")" = 0 ]]
+[[ "$(psql -XAt -d radiofrance -c 'SELECT count(*) FROM "show"')" = 6 ]]
 echo 'Passed: first-start SQL, restart persistence, application login, vector(256), restricted role and Airflow access denied.'
 if [[ "${RF_VALIDATE_LOADER:-0}" = 1 ]]; then
   cd "$database_dir/.."

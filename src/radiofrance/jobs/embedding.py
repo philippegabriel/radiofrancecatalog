@@ -10,14 +10,14 @@ import os
 from pathlib import Path
 import re
 import tempfile
-from typing import Protocol, TypedDict, cast
+from typing import Protocol, TypedDict, cast, NotRequired
+from radiofrance.libs.storage import artifact_root, publish, shared_metadata, EMBEDDING_DIRECTORY, MODEL_REVISION
 
 import numpy as np
 
 from radiofrance.jobs.chunk import ChunkManifest, contained_file, verify_output as verify_chunks
 
 MODEL_ID = 'google/embeddinggemma-2'
-MODEL_REVISION = '914f7f89142e33e77833254d9c9b90c3cef7303b'
 DIMENSIONS = 256
 DOCUMENT_PREFIX = 'title: none | text: '
 QUERY_PREFIX = 'task: search result | query: '
@@ -55,6 +55,7 @@ class EmbeddingArtifact(FileArtifact):
 
 
 class EmbeddingManifest(TypedDict):
+    artifact_root: NotRequired[str]
     version: int
     stage: str
     show: str
@@ -201,7 +202,7 @@ def verify_output(directory: Path, source_manifest: Path | None = None) -> Embed
             raise ValueError('Invalid or duplicate embedding episode or path')
         seen.add(episode)
         paths.add(item['path'])
-        path = contained_file(directory, item['path'])
+        path = contained_file(artifact_root(directory), item['path'])
         count = len(read_vectors(path, episode, item['chunk_count']))
         total += count
     if manifest['episode_count'] != len(seen) or manifest['chunk_count'] != total:
@@ -217,14 +218,20 @@ def verify_output(directory: Path, source_manifest: Path | None = None) -> Embed
 
 
 def run_embedding(source_manifest: Path, output: Path, model_cache: Path, batch_size: int = 1,
-                  threads: int = 4, encoder: Encoder | None = None) -> EmbeddingManifest:
+                  threads: int = 4, encoder: Encoder | None = None, data_root: Path | None = None) -> EmbeddingManifest:
     """Embed a completed chunk run and atomically publish immutable per-episode FP32 NPY matrices.
 
     Input/model mounts may be read-only. Load once per job, then reuse across all
     episodes. Empty runs publish without importing ML libraries. No database or
-    network access occurs. Failures remove staging; existing outputs are rejected.
+    network access occurs. With data_root, validated existing matrices are reused and
+    only the stage manifest is run-specific. Failures remove staging, while already
+    published corpus files remain reusable. Existing completion outputs are rejected.
     The optional encoder is an offline-test seam, never a CLI substitution.
     """
+    if data_root is not None:
+        data_root = data_root.resolve()
+        output = output.resolve()
+        source_manifest = source_manifest.resolve()
     if output.exists():
         raise FileExistsError(f'Use a fresh output directory: {output}')
     if batch_size < 1 or threads < 1:
@@ -236,17 +243,23 @@ def run_embedding(source_manifest: Path, output: Path, model_cache: Path, batch_
         'normalized': True, 'document_prefix': DOCUMENT_PREFIX, 'query_prefix': QUERY_PREFIX,
         'max_tokens': MAX_TOKENS, 'batch_size': batch_size, 'threads': threads,
         'packages': {name: version(name) for name in ('torch', 'transformers', 'sentence-transformers')} if encoder is None and source['chunk_count'] else {}}
-    if source['chunk_count'] and encoder is None:
-        encoder = SentenceEncoder(cached_snapshot(model_cache), batch_size, threads)
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.embedding-job-', dir=output.parent) as temporary:
         staging = Path(temporary)
         artifacts: list[EmbeddingArtifact] = []
         for item in source['chunks']:
-            path = contained_file(source_manifest.parent, item['path'])
+            path = contained_file(artifact_root(source_manifest.parent), item['path'])
             with path.open(encoding='utf-8', newline='') as stream:
                 rows = list(csv.reader(stream))
             target = staging / f"{item['episode_id']}.npy"
+            cached = data_root / EMBEDDING_DIRECTORY / target.name if data_root else None
+            if data_root is not None and cached and cached.is_file():
+                read_vectors(cached, item['episode_id'], len(rows))
+                artifacts.append({'episode_id': item['episode_id'],
+                    'path': str(cached.relative_to(data_root)), 'chunk_count': len(rows)})
+                continue
+            if rows and encoder is None:
+                encoder = SentenceEncoder(cached_snapshot(model_cache), batch_size, threads)
             matrix = np.empty((len(rows), DIMENSIONS), dtype=np.float32)
             for offset in range(0, len(rows), batch_size):
                 if encoder is None:
@@ -266,10 +279,22 @@ def run_embedding(source_manifest: Path, output: Path, model_cache: Path, batch_
             'source_run': source_manifest.parent.name,
             'configuration': config, 'episode_count': len(artifacts),
             'chunk_count': sum(item['chunk_count'] for item in artifacts), 'embeddings': artifacts}
+        if data_root is not None:
+            for item in artifacts:
+                local = staging / item['path']
+                if not local.is_file():
+                    continue
+                target = data_root / EMBEDDING_DIRECTORY / local.name
+                publish(local, target)
+                local.unlink()
+                item['path'] = str(target.relative_to(data_root))
+            manifest['artifact_root'] = str(shared_metadata(manifest, output, data_root)['artifact_root'])
         write_json(staging / 'manifest.json', manifest)
-        verify_output(staging, source_manifest)
+        if data_root is None:
+            verify_output(staging, source_manifest)
         readable_tree(staging)
         staging.rename(output)
+    verify_output(output, source_manifest)
     return manifest
 
 
@@ -278,11 +303,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model-cache', type=Path, default=default_model_cache(), help='Hub cache root (default: HF_HUB_CACHE or ~/.cache/huggingface/hub)')
     parser.add_argument('--chunk-manifest', type=Path, required=True)
+    parser.add_argument('--data-root', type=Path)
     parser.add_argument('--output-dir', type=Path, required=True)
     parser.add_argument('--batch-size', type=int, default=1)
     parser.add_argument('--threads', type=int, default=4)
     args = parser.parse_args()
-    result = run_embedding(args.chunk_manifest, args.output_dir, args.model_cache, args.batch_size, args.threads)
+    result = run_embedding(args.chunk_manifest, args.output_dir, args.model_cache, args.batch_size, args.threads, data_root=args.data_root)
     print(f"Published {result['chunk_count']} normalized 256D embeddings: {args.output_dir}/manifest.json")
 
 

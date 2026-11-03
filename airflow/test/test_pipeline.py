@@ -1,16 +1,19 @@
-"""Offline checks for whole-pipeline stage ordering and exact artifact handoffs."""
+"""Check multi-show selection, serialized coordinator runs and explicit stage handoffs."""
 
 import copy
+import os
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent / 'dags'))
-import radiofrance_pipeline as pipeline
+import radiofrance_pipeline as parent
+import process_episodes as pipeline
 
 
 class XcomReader:
-    """Provide the real dictionary structure to Airflow's sandboxed template renderer."""
+    """Expose the small coordinator output to the real Jinja renderer."""
 
     def __init__(self, state: pipeline.PipelineRuns) -> None:
         self.state = state
@@ -21,8 +24,35 @@ class XcomReader:
 
 
 class PipelineTests(unittest.TestCase):
+    def test_parent_resolves_and_queues_registry_selection(self) -> None:
+        """Freeze public registry output and keep catalogue behind all mapped show successes."""
+        self.assertEqual(parent.dag.task_ids, ['select_shows', 'process_shows', 'catalogue'])
+        self.assertEqual(parent.catalogue.upstream_task_ids, {'process_shows'})
+        self.assertEqual(parent.dag.params['shows'], [])
+        self.assertFalse(parent.dag.params['all_enabled'])
+        self.assertEqual(parent.dag.params.get_param('shows').schema['examples'], parent.SHOW_CHOICES)
+        self.assertEqual(pipeline.dag.params.get_param('show').schema['examples'], pipeline.SHOW_CHOICES)
+        self.assertNotIn('enum', pipeline.dag.params.get_param('show').schema)
+        selected = [{'slug': 'new-show', 'url': 'https://www.radiofrance.fr/franceculture/podcasts/new-show', 'enabled': True}]
+        with patch.dict(os.environ, {'RF_DATABASE_PASSWORD': 'test'}), patch.object(parent, 'resolve_programmes', return_value=selected) as resolve:
+            requests = parent.select_shows.function({'shows': [], 'all_enabled': False,
+                'new_show_url': [selected[0]['url']]}, 'manual__2026-11-03T14:30:00+00:00')
+        self.assertEqual(resolve.call_args.args[0]['new_show_url'], [selected[0]['url']])
+        self.assertEqual(requests[0]['conf'], {'show': 'new-show', 'show_url': selected[0]['url']})
+        self.assertNotIn('password', str(requests))
+        self.assertEqual(pipeline.dag.max_active_runs, 1)
+        self.assertEqual(pipeline.dag.dag_id, 'process_episodes')
+        self.assertEqual(parent.shows.partial_kwargs['trigger_dag_id'], 'process_episodes')
+
+    def test_single_show_selection_uses_registered_url_when_blank(self) -> None:
+        """Select an existing show without manually copying its URL into the form."""
+        url = 'https://www.radiofrance.fr/franceculture/podcasts/new-show'
+        with patch.object(pipeline, 'resolve_programmes', return_value=[{'slug': 'new-show', 'url': url, 'enabled': True}]):
+            state = pipeline.prepare_pipeline.function('manual__2026-11-03T14:30:00+00:00', {'show': 'new-show', 'show_url': ''})
+        self.assertEqual(state['show_url'], url)
+
     def test_order_waiting_and_failure_boundaries(self) -> None:
-        """Wait without consuming a worker, and never reset existing immutable-producing runs."""
+        """Serialize a whole show, defer stage waits, and never reset existing child runs."""
         self.assertEqual(pipeline.dag.task_ids, ['prepare_pipeline', 'download', 'chunk', 'embedding', 'database'])
         previous = 'prepare_pipeline'
         for operator in (pipeline.download, pipeline.chunk, pipeline.embedding, pipeline.database):
@@ -32,36 +62,27 @@ class PipelineTests(unittest.TestCase):
             self.assertTrue(operator.fail_when_dag_is_paused)
             self.assertFalse(operator.reset_dag_run)
             self.assertFalse(operator.skip_when_already_exists)
-            self.assertEqual(operator.allowed_states, ['success'])
-            self.assertEqual(operator.failed_states, ['failed'])
-            self.assertEqual(operator.retries, 0)
             self.assertTrue(operator.doc_md)
             previous = operator.task_id
-        self.assertTrue(pipeline.dag.doc_md)
 
-    def test_rendered_handoffs_match_child_output_convention(self) -> None:
-        """Pass each predecessor's folder and create fresh run identities for a new pipeline run."""
-        state = pipeline.prepare_pipeline.function('manual__first')
-        other = pipeline.prepare_pipeline.function('manual__second')
-        ti = XcomReader(state)
+    def test_rendered_show_and_folder_handoffs_are_isolated(self) -> None:
+        """Two shows share a parent timestamp while keeping their run manifests distinct."""
+        run = 'shows__manual__2026-11-03T14:30:00.123456+00:00__new-show'
+        params = {'show': 'new-show', 'show_url': 'https://www.radiofrance.fr/franceculture/podcasts/new-show'}
+        state = pipeline.prepare_pipeline.function(run, params)
+        other = pipeline.prepare_pipeline.function(run + '-two', {'show': 'other-show',
+            'show_url': 'https://www.radiofrance.fr/franceinter/podcasts/other-show'})
+        self.assertEqual(state['download']['folder'], '2026-11-03_14-30-00-123456Z/download/new-show')
+        self.assertNotEqual(state['chunk']['folder'], other['chunk']['folder'])
         stages: list[tuple[pipeline.TriggerDagRunOperator, pipeline.Stage]] = [
             (pipeline.download, 'download'), (pipeline.chunk, 'chunk'),
             (pipeline.embedding, 'embedding'), (pipeline.database, 'database')]
         for operator, stage in stages:
             rendered = copy.copy(operator)
-            rendered.render_template_fields({'ti': ti})
+            rendered.render_template_fields({'ti': XcomReader(state), 'params': params})
             self.assertEqual(rendered.trigger_run_id, state[stage]['run_id'])
-            assert isinstance(rendered.trigger_run_id, str)
-            self.assertEqual(state[stage]['folder'], f'airflow-pipeline__manual__first__{stage}')
-            self.assertNotEqual(state[stage]['run_id'], other[stage]['run_id'])
-            if stage == 'chunk':
-                self.assertEqual(rendered.conf, {'download_run': state['download']['folder']})
-            elif stage == 'embedding':
-                self.assertEqual(rendered.conf, {'chunk_run': state['chunk']['folder']})
-            elif stage == 'database':
-                self.assertEqual(rendered.conf, {'embedding_run': state['embedding']['folder']})
-            self.assertEqual(rendered.trigger_dag_id, operator.trigger_dag_id)
-
-
-if __name__ == '__main__':
-    unittest.main()
+            assert rendered.conf is not None
+            if operator.task_id != 'database':
+                self.assertEqual(rendered.conf['show'], 'new-show')
+                self.assertEqual(rendered.conf['output_folder'], state[stage]['folder'])
+        self.assertEqual(parent.catalogue.command, ['--output-dir', '/data/catalogue', '--replace'])

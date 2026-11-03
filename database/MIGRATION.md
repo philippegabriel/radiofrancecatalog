@@ -1,7 +1,7 @@
 # Completed one-off database migration
 
 On 22 October 2026 the existing host `radiofrance` database was copied into the
-Compose application database, replacing its pilot data. The original host database
+Compose application database, replacing its sample data. The original host database
 and Airflow metadata were left unchanged. The destination contains:
 
 - 38,083 catalogue episodes;

@@ -7,7 +7,9 @@ from pathlib import Path
 import re
 import tempfile
 import time
-from typing import TypedDict
+from typing import TypedDict, NotRequired
+from radiofrance.libs.storage import publish, shared_metadata
+from radiofrance.libs.programmes import show_url as validate_show_url
 from radiofrance.libs.episode_selection import read_selection
 
 from radiofrance.libs.catalogue import SHOWS, CatalogueRow, read_rows
@@ -25,6 +27,7 @@ class TranscriptArtifact(Artifact):
 
 
 class DownloadManifest(TypedDict):
+    artifact_root: NotRequired[str]
     version: int
     show: str
     cutoff_timestamp: int
@@ -41,7 +44,7 @@ def artifact(path: Path, root: Path) -> Artifact:
 
 def run_download(show: str, output: Path, api_key: str,
                  transcript_delay: float = 1.0, episode_selection: Path | None = None,
-                 dsn: str = '') -> DownloadManifest:
+                 dsn: str = '', data_root: Path | None = None, show_url: str | None = None) -> DownloadManifest:
     """Read PostgreSQL's watermark, fetch a metadata delta and download its transcripts.
 
     The database is read only and closed before acquisition. Include the watermark
@@ -52,9 +55,20 @@ def run_download(show: str, output: Path, api_key: str,
     Publish episodes.json, raw transcripts and a version-2 manifest atomically;
     failure leaves the database watermark and final output unchanged. No database
     writes, catalogue CSVs, S3 publication or Airflow asset events occur here.
+    With data_root, reuse transcripts by episode ID and publish newly acquired
+    JSON there. Only metadata and completion records are stored in output. Shared
+    transcripts can survive failures and be reused before a database commit.
     """
-    if show not in SHOWS:
-        raise ValueError(f'Unsupported show: {show}')
+    if data_root is not None:
+        data_root = data_root.resolve()
+        output = output.resolve()
+    if show_url is None:
+        if show not in SHOWS:
+            raise ValueError(f'Unsupported show without a programme URL: {show}')
+        show_url = f'https://www.radiofrance.fr/{SHOWS[show]}/podcasts/{show}'
+    programme = validate_show_url(show_url)
+    if programme['slug'] != show:
+        raise ValueError('Programme URL does not match the selected show')
     if not api_key.strip():
         raise ValueError('RADIOFRANCE_API_KEY is missing or empty. Export it before running the download job.')
     api_key = api_key.strip()
@@ -72,7 +86,7 @@ def run_download(show: str, output: Path, api_key: str,
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.download-job-', dir=output.parent) as staging:
         directory = Path(staging)
-        rows = fetch_all(api_key, f'https://www.radiofrance.fr/{SHOWS[show]}/podcasts/{show}', since_ts=query_cutoff)
+        rows = fetch_all(api_key, programme['url'], since_ts=query_cutoff)
         expected = {e['episode_id']: e for e in selection['episodes']} if selection else {}
         if selection:
             selected = []
@@ -116,7 +130,8 @@ def run_download(show: str, output: Path, api_key: str,
                 raise ValueError('Episode ID is not a safe filename')
             if index and transcript_delay:
                 time.sleep(transcript_delay)
-            transcript = fetch_transcript(aod_uuid(episode_id))
+            cached = data_root / 'transcripts' / f'{episode_id}.json' if data_root else None
+            transcript = json.loads(cached.read_text()) if cached and cached.is_file() else fetch_transcript(aod_uuid(episode_id))
             if transcript is None:
                 raise RuntimeError(f'Transcript unavailable for {episode_id}')
             path = transcript_dir / f'{episode_id}.json'
@@ -134,6 +149,17 @@ def run_download(show: str, output: Path, api_key: str,
             'episodes': artifact(episodes, directory),
             'transcripts': transcripts,
         }
+        if data_root is not None:
+            for item in transcripts:
+                local = directory / item['path']
+                target = data_root / 'transcripts' / local.name
+                if not target.is_file():
+                    publish(local, target)
+                item['path'] = str(target.relative_to(data_root))
+            manifest['episodes']['path'] = str((output / 'episodes.json').relative_to(data_root))
+            manifest['artifact_root'] = str(shared_metadata(manifest, output, data_root)['artifact_root'])
+            import shutil
+            shutil.rmtree(transcript_dir)
         (directory / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
         # TemporaryDirectory starts at 0700. Publish public podcast artifacts with
         # read/traverse permissions for Airflow's separate container user, even
@@ -148,7 +174,9 @@ def run_download(show: str, output: Path, api_key: str,
 def main() -> None:
     """Download a show using PostgreSQL connection variables and a runtime API secret."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--show', required=True, choices=list(SHOWS))
+    parser.add_argument('--show', required=True)
+    parser.add_argument('--data-root', type=Path, help='Accumulate transcripts under this shared data directory')
+    parser.add_argument('--show-url', help='Canonical registered programme URL')
     parser.add_argument('--output-dir', type=Path, required=True)
     parser.add_argument('--transcript-delay', type=float, default=1.0)
     parser.add_argument('--api-key-file', type=Path, help='Read a runtime-mounted key file instead of the environment')
@@ -156,7 +184,7 @@ def main() -> None:
     args = parser.parse_args()
     api_key = args.api_key_file.read_text(encoding='utf-8') if args.api_key_file else os.environ.get('RADIOFRANCE_API_KEY', '')
     manifest = run_download(args.show, args.output_dir,
-                            api_key, args.transcript_delay, args.episode_selection)
+                            api_key, args.transcript_delay, args.episode_selection, data_root=args.data_root, show_url=args.show_url)
     print(json.dumps(manifest, indent=2))
 
 

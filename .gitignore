@@ -23,14 +23,11 @@ __pycache__/
 # Local embedding snapshots, validation runtime and generated vectors
 /data/embedding-models/
 /data/embedding-runtime/
-/data/embedding-pilot/
 /data/embedding-export/
 /data/embedding-backfill/
 /data/embeddings/
 
 # Generated pipeline artifacts, benchmark environments and database backups
-/data/download-pilot/
-/data/chunk-pilot/
 /data/transcripts/
 /data/benchmarks/
 /data/database-backups/
@@ -40,4 +37,12 @@ __pycache__/
 /dist/
 *.egg-info/
 
-/data/description-pilot/
+
+# Shared pipeline corpus and run records
+/data/runs/
+/data/chunks/
+/data/catalogue/
+/data/episode-descriptions/
+
+# Generated corpora, exports and retained older run outputs
+/data/

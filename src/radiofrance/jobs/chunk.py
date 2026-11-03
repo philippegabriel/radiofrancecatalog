@@ -6,7 +6,8 @@ import json
 from pathlib import Path
 import re
 import tempfile
-from typing import TypedDict, cast
+from typing import TypedDict, cast, NotRequired
+from radiofrance.libs.storage import artifact_root, publish, shared_metadata, CHUNK_DIRECTORY
 
 
 class TranscriptArtifact(TypedDict):
@@ -15,6 +16,7 @@ class TranscriptArtifact(TypedDict):
 
 
 class DownloadManifest(TypedDict):
+    artifact_root: NotRequired[str]
     version: int
     show: str
     new_episode_count: int
@@ -33,6 +35,7 @@ class ChunkStrategy(TypedDict):
 
 
 class ChunkManifest(TypedDict):
+    artifact_root: NotRequired[str]
     version: int
     stage: str
     show: str
@@ -76,7 +79,7 @@ def validate_source(path: Path) -> DownloadManifest:
         if not re.fullmatch(r'[A-Za-z0-9_-]+', episode) or episode in seen:
             raise ValueError('Invalid or duplicate episode ID')
         seen.add(episode)
-        source = contained_file(path.parent, item['path'])
+        source = contained_file(artifact_root(path.parent), item['path'])
         if source.name != f'{episode}.json':
             raise ValueError(f'Transcript identity mismatch: {episode}')
     return manifest
@@ -97,7 +100,7 @@ def verify_output(directory: Path) -> ChunkManifest:
         if item['episode_id'] in seen:
             raise ValueError('Duplicate output episode')
         seen.add(item['episode_id'])
-        path = contained_file(directory, item['path'])
+        path = contained_file(artifact_root(directory), item['path'])
         with path.open(encoding='utf-8', newline='') as stream:
             rows = list(csv.reader(stream))
         if len(rows) != item['chunk_count'] or any(
@@ -111,17 +114,24 @@ def verify_output(directory: Path) -> ChunkManifest:
     return manifest
 
 
-def run_chunking(source_manifest: Path, output: Path) -> ChunkManifest:
+def run_chunking(source_manifest: Path, output: Path, data_root: Path | None = None) -> ChunkManifest:
     """Reuse the current chunker and atomically publish CSVs and versioned provenance.
 
     Inputs are immutable local transcript artifacts identified by a download
     manifest. No cloud, network, model or database access occurs. An empty
     transcript list publishes an empty successful manifest. Existing outputs
     are never overwritten; failures remove staging and leave no final directory.
+    With data_root, per-episode CSVs accumulate in the strategy corpus and only
+    the manifest goes into output. Equal existing files are reused; conflicts fail.
+    Files published before a failure remain available for a later run.
     """
     # Airflow imports the verification helpers without needing the chunker installed.
     from radiofrance.chunk_json_to_csv import MIN_SIZE, TARGET_SIZE, transcript_to_csv
 
+    if data_root is not None:
+        data_root = data_root.resolve()
+        output = output.resolve()
+        source_manifest = source_manifest.resolve()
     if output.exists():
         raise FileExistsError(f'Use a fresh output directory: {output}')
     source = validate_source(source_manifest)
@@ -132,7 +142,7 @@ def run_chunking(source_manifest: Path, output: Path) -> ChunkManifest:
         staging = Path(temporary)
         artifacts: list[ChunkArtifact] = []
         for item in source['transcripts']:
-            transcript = contained_file(source_manifest.parent, item['path'])
+            transcript = contained_file(artifact_root(source_manifest.parent), item['path'])
             target = staging / f"{item['episode_id']}.csv"
             with target.open('w', encoding='utf-8', newline='') as stream:
                 chunk_count = transcript_to_csv(transcript, stream)
@@ -144,12 +154,23 @@ def run_chunking(source_manifest: Path, output: Path) -> ChunkManifest:
             'strategy': strategy, 'episode_count': len(artifacts),
             'chunk_count': sum(item['chunk_count'] for item in artifacts), 'chunks': artifacts,
         }
+        if data_root is not None:
+            for item in artifacts:
+                local = staging / item['path']
+                target = data_root / CHUNK_DIRECTORY / local.name
+                publish(local, target)
+                local.unlink()
+                item['path'] = str(target.relative_to(data_root))
+            manifest['source_run'] = str(source_manifest.parent.relative_to(data_root))
+            manifest['artifact_root'] = str(shared_metadata(manifest, output, data_root)['artifact_root'])
         (staging / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
-        verify_output(staging)
+        if data_root is None:
+            verify_output(staging)
         for path in staging.iterdir():
             path.chmod(0o644)
         staging.chmod(0o755)
         staging.rename(output)
+    verify_output(output)
     return manifest
 
 
@@ -157,9 +178,10 @@ def main() -> None:
     """Chunk one completed download run and print its successful manifest."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--download-manifest', type=Path, required=True)
+    parser.add_argument('--data-root', type=Path)
     parser.add_argument('--output-dir', type=Path, required=True)
     args = parser.parse_args()
-    print(json.dumps(run_chunking(args.download_manifest, args.output_dir), indent=2))
+    print(json.dumps(run_chunking(args.download_manifest, args.output_dir, args.data_root), indent=2))
 
 
 if __name__ == '__main__':

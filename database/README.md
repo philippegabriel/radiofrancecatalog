@@ -38,8 +38,7 @@ sudo docker compose up -d --wait --wait-timeout 300
 
 The Airflow UI login is restored from `.env` on startup; follow the login instructions
 in the [Airflow guide](../airflow/DEPLOYMENT.md). Preserve `.env`. These commands
-do not remove host files under `data/download-pilot`, `data/chunk-pilot`,
-`data/embedding-pilot`, or the Hugging Face cache. No host PostgreSQL service or
+do not remove shared host files under `data/`, or the Hugging Face cache. No host PostgreSQL service or
 host data directory is modified. Other Docker volumes are not selected.
 
 ## Connections
@@ -109,11 +108,11 @@ and vectors in a single transaction. It does not run models or initialize tables
 ```bash
 sudo docker compose build database-loader
 sudo docker compose run --rm database-loader \
-  --embedding-manifest /input/embeddings/RUN/manifest.json \
-  --chunk-root /input/chunks --download-root /input/downloads
+  --embedding-manifest /data/embeddings/embeddinggemma2-fp32-256/914f7f89142e33e77833254d9c9b90c3cef7303b/segment-characters-v1-1000-300/runs/RUN/manifest.json \
+  --chunk-root /data/chunks/segment-characters-v1-1000-300/runs --download-root /data
 ```
 
-Replace `RUN` with the selected directory under `data/embedding-pilot`.
+Replace `RUN` with the selected UTC timestamp; see [storage](../docs/storage.md).
 Compose supplies the application credentials. The service uses read-only artifact
 mounts and installs no model libraries. Run names must be unique across imports;
 repeat loading of the same completed run verifies it and creates no duplicates.
@@ -188,3 +187,23 @@ bash ci/run-tests
 Tests use an isolated PostgreSQL cluster and deterministic vectors. They cover
 transaction rollback, repeated imports, coexisting configurations, invalid vectors,
 missing records and the Airflow container wiring. No model download is required.
+
+### HTML catalogue export
+
+The full pipeline refreshes `data/catalogue/index.html` and per-show pages after
+verified database loading. It reads all committed catalogue metadata, including
+episodes without transcripts. There is no CSV input or model inference.
+
+See [storage and upgrade instructions](../docs/storage.md) for setup and standalone
+export commands. The task reuses the database image and the host UID/GID. Pages
+are replaced individually; the count manifest is published last. A failed export
+leaves database commits intact and can be rerun independently. Existing root HTML
+pages are untouched, and nothing is published automatically to GitHub Pages.
+
+## Show registry
+
+`database/init/40-shows.sql` creates the `"show"` table (slug, canonical URL, enabled)
+and seeds the six original shows. It is safe to apply to an existing database.
+The pipeline trigger form can register new URLs and select one, several or all
+enabled shows. See [setup and usage](../docs/storage.md#select-shows-or-register-new-ones).
+Episode tables and existing cutoffs are preserved.

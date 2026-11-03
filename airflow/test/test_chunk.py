@@ -22,9 +22,9 @@ class LocalChunkTests(unittest.TestCase):
         self.assertEqual(dag_module.chunk.network_mode, 'none')
         self.assertFalse(dag_module.chunk.do_xcom_push)
         self.assertFalse(dag_module.chunk.mount_tmp_dir)
-        self.assertTrue(dag_module.chunk.mounts[0]['ReadOnly'])
-        self.assertFalse(dag_module.chunk.mounts[1]['ReadOnly'])
-        self.assertEqual(len(dag_module.chunk.mounts), 2)
+        self.assertFalse(dag_module.chunk.mounts[0]['ReadOnly'])
+        self.assertEqual(dag_module.chunk.mounts[0]['Target'], '/data')
+        self.assertEqual(len(dag_module.chunk.mounts), 1)
         self.assertTrue(dag_module.dag.doc_md)
 
     def test_selected_run_and_output_provenance(self) -> None:

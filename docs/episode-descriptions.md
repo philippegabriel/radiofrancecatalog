@@ -1,4 +1,4 @@
-# Episode-description embedding pilot
+# Episode-description embeddings
 
 This stage searches episode metadata independently of transcript chunks. It uses
 `rf.title` plus `rf.description`; it does not embed programme descriptions.
@@ -48,13 +48,13 @@ variables (`PGHOST=127.0.0.1`, `PGPORT=55432`, `PGUSER=radiofrance`,
 
 ```bash
 venv/radiofrance/bin/python -m radiofrance.jobs.episode_descriptions export \
-  --limit 50 --output data/description-pilot/pilot-050/selection.json
+  --limit 50 --output data/episode-descriptions/sample-050/selection.json
 venv/radiofrance/bin/python -m radiofrance.jobs.episode_descriptions embed \
-  --selection data/description-pilot/pilot-050/selection.json \
-  --output-dir data/description-pilot/pilot-050/embeddings \
+  --selection data/episode-descriptions/sample-050/selection.json \
+  --output-dir data/episode-descriptions/sample-050/embeddings \
   --batch-size 4 --threads 4
 venv/radiofrance/bin/python -m radiofrance.jobs.episode_descriptions load \
-  --input-dir data/description-pilot/pilot-050/embeddings
+  --input-dir data/episode-descriptions/sample-050/embeddings
 ```
 
 The exporter refuses to overwrite a snapshot. Each episode produces one
@@ -63,7 +63,7 @@ Embedding retries validate and skip completed files. Changed metadata/model
 settings require a fresh output directory. Use one writer per directory.
 `manifest.json` is published only when every episode has a validated vector.
 `benchmark.json` records startup, inference, total elapsed time and Linux peak
-process RSS; it is a pilot measurement, not a whole-corpus performance guarantee.
+process RSS; it is a sample measurement, not a whole-corpus performance guarantee.
 Save it before a resume, which writes a new report for that invocation.
 
 Loading validates the files and locks the selected source rows while checking
@@ -75,38 +75,29 @@ Tests cover prompts, FP32 matrix shape, interrupted-run resume, corrupt files,
 blank/duplicate metadata, stale exports, conflicting vectors and changed-source
 updates. Run `venv/airflow/bin/pyright` and `bash ci/run-tests`.
 
-This is an explicit CLI pilot; no description Airflow DAG, AWS launch or full
-backfill is performed. Before choosing AWS hardware, compare g6 and g4dn on the
-same exported inputs, model precision, batch sizes and output checks, and include
-startup time and actual hourly price in the comparison. Confirm instance selection
-with the user before any launch.
+This is an explicit CLI stage, separate from the transcript Airflow pipeline.
 
-## First measured pilot
+## First measured sample
 
-On 2026-11-02 the local pilot processed 50 episodes across all six shows (9, 9,
+On 2026-11-02 the local sample processed 50 episodes across all six shows (9, 9,
 8, 8, 8, 8), using batch size 4 and four CPU threads. Description text totalled
 10,394 characters. Encoding took 8.42 seconds; model loading took 13.29 seconds;
 total job time was 21.79 seconds. Linux peak process RSS was 2,398 MiB. The 50
 NPY files occupy 57,600 bytes, excluding JSON metadata.
 
-The initial benchmark is retained in
-`data/description-pilot/pilot-050/initial-benchmark.json`. A retry encoded zero
-new episodes and reused all 50 checkpoints. The first database load wrote 50
-rows; a second load changed zero rows. All vectors are 256D and normalized, and
-source snapshots match current metadata. Original catalogue, segment, chunk and
-transcript-embedding counts remain unchanged. See `verification.json` alongside
-the selection. These generated files are ignored by Git.
+A retry encoded zero new episodes and reused all 50 checkpoints. The first database
+load wrote 50 rows; a second load changed zero rows. The generated local evidence
+was removed during data cleanup; the figures above describe that historical run.
 
 `database/sql/description_search.sql` provides description-only retrieval using
-an explicit model ID and a compatible query vector. Three query smoke tests and
-their top-three matches are saved in `retrieval-smoke-test.json`. This checks the
-retrieval path on the small pilot; it is not a judged retrieval-quality benchmark
+an explicit model ID and a compatible query vector. Three query smoke tests checked the
+retrieval path on the small sample; it is not a judged retrieval-quality benchmark
 or a comparison against the whole transcript corpus.
 
 ## Completed g4dn description backfill
 
 The 2026-11-02 backfill selected all 22,291 nonblank episode descriptions. One
-London g4dn.xlarge Spot worker reused the 50 pilot vectors and encoded 22,241 new
+London g4dn.xlarge Spot worker reused the 50 sample vectors and encoded 22,241 new
 vectors using CUDA FP32, batch size 32 and four CPU threads. Inference took
 336.34 seconds; the embedding job took 396.20 seconds including model loading
 and local file work (excluding instance provisioning, dependency installation
@@ -119,14 +110,11 @@ model configuration and completion metadata are retained with the results:
 s3://9c47ab5c-5039-42c1-a790-7e732bde98f4/data/embedding-output/embeddinggemma2-fp32-256/episode-descriptions-20261102/
 ```
 
-The same files are under `data/description-pilot/backfill-20261102/results/`.
-Their NPY payload files occupy 25,679,232 bytes. The PostgreSQL loader inserted
-22,241 new vectors and left the 50 existing pilot vectors unchanged. Verification
+Their NPY payload files occupied 25,679,232 bytes. The PostgreSQL loader inserted
+22,241 new vectors and left the 50 existing sample vectors unchanged. Verification
 found zero missing eligible descriptions and zero stale snapshots; transcript
-corpus counts were unchanged. Details are in the ignored `verification.json`,
-`database-load-report.json`, `download-report.json` and `aws/deployment.json`
-under that backfill directory. Worker code, logs and bootstrap artifacts remain
-outside the reusable application code and are not committed automatically.
+corpus counts were unchanged. The temporary local backfill output and reports were
+removed during data cleanup. The S3 location above records the historical upload.
 
 ## Query descriptions from Make
 

@@ -22,7 +22,7 @@ class LocalEmbeddingTests(unittest.TestCase):
         self.assertEqual(dag_module.embed.mem_limit, '4g')
         self.assertFalse(dag_module.embed.do_xcom_push)
         self.assertFalse(dag_module.embed.mount_tmp_dir)
-        self.assertEqual([mount['ReadOnly'] for mount in dag_module.embed.mounts], [True, False, True])
+        self.assertEqual([mount['ReadOnly'] for mount in dag_module.embed.mounts], [False, True])
         self.assertTrue(dag_module.dag.doc_md)
         self.assertNotIn('API_KEY', str(dag_module.embed.environment))
 

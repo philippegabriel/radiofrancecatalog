@@ -25,7 +25,7 @@ class DescriptionDatabaseTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         database.load(fixture.fixture(self.root), self.dsn)
 
-    def pilot(self, name: str) -> Path:
+    def sample(self, name: str) -> Path:
         """Export current DB metadata and publish deterministic description vectors."""
         path = self.root / (name + '.json')
         selection = job.export_selection(self.dsn, path)
@@ -36,7 +36,7 @@ class DescriptionDatabaseTests(unittest.TestCase):
 
     def test_load_resume_and_metadata_update(self) -> None:
         """Description loading is idempotent and accepts a newly exported metadata update."""
-        first = self.pilot('first')
+        first = self.sample('first')
         self.assertEqual(job.load(first, self.dsn)['written'], 1)
         self.assertEqual(job.load(first, self.dsn)['unchanged'], 1)
         with psycopg2.connect(self.dsn) as connection:
@@ -44,7 +44,7 @@ class DescriptionDatabaseTests(unittest.TestCase):
                 cursor.execute("UPDATE rf SET title='New title'")
         with self.assertRaisesRegex(ValueError, 'metadata changed'):
             job.load(first, self.dsn)
-        second = self.pilot('second')
+        second = self.sample('second')
         self.assertEqual(job.load(second, self.dsn)['written'], 1)
         with psycopg2.connect(self.dsn) as connection:
             with connection.cursor() as cursor:
@@ -55,7 +55,7 @@ class DescriptionDatabaseTests(unittest.TestCase):
 
     def test_stale_metadata_and_conflicting_vector(self) -> None:
         """Reject stale snapshots or conflicting vectors without modifying existing data."""
-        directory = self.pilot('first')
+        directory = self.sample('first')
         manifest = json.loads((directory / 'manifest.json').read_text())
         with psycopg2.connect(self.dsn) as connection:
             with connection.cursor() as cursor:

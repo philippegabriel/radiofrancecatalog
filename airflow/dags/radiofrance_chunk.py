@@ -8,6 +8,7 @@ import re
 from typing import TypedDict
 
 from radiofrance.libs.runs import run_folder
+from radiofrance.libs.storage import CHUNK_DIRECTORY
 
 from airflow.sdk import DAG, Param, task
 from airflow.sdk.definitions.param import ParamsDict
@@ -22,8 +23,8 @@ class ChunkRun(TypedDict):
     output_folder: str
 
 
-DOWNLOADS = Path('/opt/radiofrance/output')
-OUTPUTS = Path('/opt/radiofrance/chunks')
+DOWNLOADS = Path('/opt/radiofrance/data/runs')
+OUTPUTS = Path('/opt/radiofrance/data') / CHUNK_DIRECTORY / 'runs'
 HOST = os.environ.get('RF_PROJECT_ROOT') or '/not-configured'
 
 
@@ -32,32 +33,28 @@ with DAG(
     description='Chunk transcripts from a selected download manifest and verify the results.',
     doc_md="""
 ## Purpose and flow
-Process one completed download run for RF_SHOW (default mecaniques-du-journalisme). `prepare_chunking`
-validates its transcript list and files and counts. `chunk` runs the existing character
-chunker in a separate, network-disabled container. `verify_chunks` checks the
-output manifest, row counts, files and counts and source-manifest provenance.
+Standalone chunk recovery stage. prepare_chunking verifies an explicit download;
+chunk writes/reuses per-episode CSVs; verify_chunks checks counts and source lineage.
+For a full run, trigger radiofrance_pipeline instead.
 
 ## Configuration and running
-Build `radiofrance-chunk:pilot` from chunking/Dockerfile, create data/chunk-pilot
-as the project owner, and recreate Compose. The normal .env supplies the
-host path and UID/GID. In the trigger form, supply `download_run`, the basename
-of a completed data/download-pilot/airflow-<run-id> directory.
-See chunking/README.md for commands. No API key or additional services are needed.
+Build radiofrance-chunk:dev and follow airflow/DEPLOYMENT.md. Supply download_run
+as <UTC timestamp>/download, relative to data/runs. The parent explicitly passes the show and output folder.
+The host UID/GID and project path come from .env. The processing container has no
+network or credentials. It reads/writes the shared data mount.
 
-## Inputs, outputs and retries
-Only transcripts listed in the download manifest are processed. Output is a
-new data/chunk-pilot/airflow-<run-id>/ directory containing per-episode CSVs
-and a versioned manifest. Empty downloads succeed with no CSVs. Inputs and the
-metadata remain unchanged. No embeddings, database imports, cloud calls or asset
-events occur. Trigger a new DAG run to repeat processing; automatic retries are
-disabled and existing outputs are not overwritten. A failed verification alone
-can be cleared and retried without rerunning the chunk container.
+## Outputs and recovery
+CSVs accumulate in data/chunks/segment-characters-v1-1000-300, one file per episode.
+Only a completion manifest is written under its runs/<UTC timestamp>/ directory.
+No duplicate corpus files are kept in that directory. Existing equal CSVs are reused;
+conflicting content fails. Empty downloads produce empty manifests. A new pipeline
+run can reuse files left by an earlier failure. Verification can be retried alone.
 """,
     schedule=None,
     catchup=False,
     max_active_runs=1,
     default_args={'retries': 0},
-    params=ParamsDict({'download_run': Param('', type='string', description='Completed download folder: airflow-<run-id>')}),
+    params=ParamsDict({'download_run': Param('', type='string', description='Standalone recovery: <UTC timestamp>/download under data/runs')}),
     tags=['radiofrance', 'chunking'],
 ) as dag:
     @task(multiple_outputs=False)
@@ -70,40 +67,42 @@ can be cleared and retried without rerunning the chunk container.
         if not os.environ.get('RF_PROJECT_ROOT') or not Path(HOST).is_absolute():
             raise ValueError('Configure the host path before triggering this DAG')
         name = params['download_run']
-        if not re.fullmatch(r'airflow-[A-Za-z0-9_-]+', name):
-            raise ValueError('download_run must be the airflow-<run-id> download directory name')
+        if not re.fullmatch(r'[A-Za-z0-9_-]+(?:/download(?:/[a-z0-9-]+)?)?', name) or '..' in name:
+            raise ValueError('download_run must be the <UTC timestamp>/download directory name')
         if not OUTPUTS.is_dir():
-            raise ValueError('Create data/chunk-pilot and recreate Compose before running')
+            raise ValueError('Create the shared chunk corpus directories and recreate Compose before running')
         path = DOWNLOADS / name / 'manifest.json'
         source = validate_source(path)
-        if source['show'] != os.environ.get('RF_SHOW', 'mecaniques-du-journalisme'):
-            raise ValueError('Download show does not match configured RF_SHOW')
-        return {'download_run': name, 'output_folder': run_folder(run_id)}
+        if source['show'] != params.get('show', source['show']):
+            raise ValueError('Download show does not match selected show')
+        output_folder = params.get('output_folder') or run_folder(run_id)
+        if not re.fullmatch(r'[A-Za-z0-9_-]+', output_folder):
+            raise ValueError('Invalid output folder')
+        return {'download_run': name, 'output_folder': output_folder}
 
     @task
     def verify_chunks(state: ChunkRun) -> None:
         """Verify the published run and its source identity; log the manifest path.
 
-        Read chunk CSVs and manifests from read-only mounts. Fail on missing,
+        Read chunk CSVs and manifests from the read-only Airflow data mount. Fail on missing,
         corrupt or mismatched artifacts. Modify no files and return no value.
         """
         manifest = verify_output(OUTPUTS / state['output_folder'])
-        if manifest['source_run'] != state['download_run']:
+        if manifest['source_run'] != ('runs/' + state['download_run'] if manifest.get('artifact_root') else state['download_run']):
             raise ValueError('Chunk output does not match the selected download')
-        print(f"Verified {manifest['chunk_count']} chunks: data/chunk-pilot/{state['output_folder']}/manifest.json")
+        print(f"Verified {manifest['chunk_count']} chunks: shared chunk manifest: {state['output_folder']}/manifest.json")
 
     state = prepare_chunking()  # pyright: ignore[reportCallIssue]
     chunk = DockerOperator(
-        task_id='chunk', image='radiofrance-chunk:pilot',
+        task_id='chunk', image='radiofrance-chunk:dev',
         docker_url='unix://var/run/docker.sock', api_version='auto',
-        command=['--download-manifest', "/input/{{ ti.xcom_pull(task_ids='prepare_chunking')['download_run'] }}/manifest.json",
-                 '--output-dir', "/output/{{ ti.xcom_pull(task_ids='prepare_chunking')['output_folder'] }}"],
-        mounts=[Mount('/input', f'{HOST}/data/download-pilot', type='bind', read_only=True),
-                Mount('/output', f'{HOST}/data/chunk-pilot', type='bind')],
+        command=['--download-manifest', "/data/runs/{{ ti.xcom_pull(task_ids='prepare_chunking')['download_run'] }}/manifest.json",
+                 '--data-root', '/data', '--output-dir', f"/data/{CHUNK_DIRECTORY}/runs/{{{{ ti.xcom_pull(task_ids='prepare_chunking')['output_folder'] }}}}"],
+        mounts=[Mount('/data', f'{HOST}/data', type='bind')],
         user=f"{os.environ.get('RF_UID', '1000')}:{os.environ.get('RF_GID', '1000')}",
         mount_tmp_dir=False, network_mode='none', mem_limit='1g', auto_remove='force',
         execution_timeout=timedelta(minutes=10), do_xcom_push=False,
-        doc_md='Run the existing chunker against the explicit download manifest. Read-only transcript inputs and writable output mount; no network or API key. Publish CSVs and manifest only on success.',
+        doc_md='Run the existing chunker against the explicit download manifest. Shared corpus input/output mount; no network or API key. Publish CSVs and manifest only on success.',
     )
     checked = verify_chunks(state)  # pyright: ignore[reportArgumentType]
     _ = state >> chunk >> checked

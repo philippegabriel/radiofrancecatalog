@@ -1,3 +1,5 @@
+For the current directory layout and upgrade commands, see [pipeline storage](../docs/storage.md).
+
 # Download stage
 
 The download job uses PostgreSQL as the catalogue source of truth. It reuses
@@ -31,10 +33,10 @@ missing transcripts. Per-show execution remains serialized by the pipeline DAG.
 Outputs:
 
 ```text
-OUTPUT/
+data/runs/<UTC timestamp>/download/
   episodes.json                # new episode metadata only; [] for no new work
-  transcripts/EPISODE_ID.json   # raw transcript JSON for each new episode
-  manifest.json                # version 2; show, DB cutoff/count, episode count and paths
+  manifest.json                # version 2; DB cutoff/count and shared artifact paths
+data/transcripts/EPISODE_ID.json # accumulated raw transcripts
 ```
 
 `episodes.json` is a JSON array with the existing catalogue fields. `published_ts`
@@ -42,7 +44,8 @@ is an integer; the other fields are strings. The metadata IDs must match the
 manifest's transcript IDs exactly. Chunk CSVs and embedding NPY files belong to
 later stages and keep their existing formats.
 
-Publication is atomic. Missing transcripts or changed fixed-sample counts fail
+Corpus files are published individually and the run metadata is published atomically.
+Shared transcripts may survive failures for reuse by a later run. Missing transcripts or changed fixed-sample counts fail
 the job; failed staging directories are removed. Existing completed directories
 are never overwritten. Completed directories use mode 0755 and files 0644 so
 Airflow's separate container user can verify them. No database writes, S3 calls
@@ -60,8 +63,9 @@ After upgrading an existing checkout, rebuild the affected images and recreate
 Airflow without deleting the database volume:
 
 ```bash
-sudo docker build -f download/Dockerfile -t radiofrance-download:pilot .
-sudo docker build -f chunking/Dockerfile -t radiofrance-chunk:pilot .
+sudo docker build -f download/Dockerfile -t radiofrance-download:dev .
+sudo docker build -f chunking/Dockerfile -t radiofrance-chunk:dev .
+sudo docker build -f embedding/Dockerfile -t radiofrance-embedding:dev .
 sudo docker compose build airflow database-loader
 sudo docker compose up -d --wait --wait-timeout 300 airflow
 ```
@@ -84,7 +88,8 @@ read -rsp 'Database password: ' PGPASSWORD; export PGPASSWORD
 venv/airflow/bin/python -m radiofrance.jobs.download \
   --show mecaniques-du-journalisme \
   --api-key-file .OpenAPIKey \
-  --output-dir data/download-pilot/run-new
+  --data-root data \
+  --output-dir data/runs/2026-11-03_14-30-00-000000Z/download
 ```
 
 The default delay between transcript requests is one second. Use

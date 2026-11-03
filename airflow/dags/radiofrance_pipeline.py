@@ -1,117 +1,127 @@
-"""Run the download-to-database pilot by coordinating the existing stage DAGs."""
+"""Resolve registered/new shows at trigger time, process them serially, then export HTML."""
 
+from collections.abc import Mapping
 from datetime import timedelta
-from typing import Literal, TypedDict
+import os
+from typing import TypedDict, cast
 
-from radiofrance.libs.runs import run_folder
-
-from airflow.sdk import DAG, task
+from airflow.sdk import DAG, Param, task
+from airflow.sdk.definitions.param import ParamsDict
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
+from airflow.providers.docker.operators.docker import DockerOperator
+from docker.types import Mount
+from psycopg2.extensions import make_dsn
+
+from radiofrance.libs.programmes import ProgrammeSelection, resolve_programmes, read_show_choices
 
 
-type Stage = Literal['download', 'chunk', 'embedding', 'database']
+class ShowConf(TypedDict):
+    show: str
+    show_url: str
 
 
-class StageRun(TypedDict):
-    run_id: str
-    folder: str
+class ShowRequest(TypedDict):
+    trigger_run_id: str
+    conf: ShowConf
 
 
-class PipelineRuns(TypedDict):
-    download: StageRun
-    chunk: StageRun
-    embedding: StageRun
-    database: StageRun
-
-
-class StageConf(TypedDict, total=False):
-    download_run: str
-    chunk_run: str
-    embedding_run: str
-
-
-def run_reference(parent_run_id: str, stage: Stage) -> StageRun:
-    """Name a child run and its artifact folder using the stage jobs' run-ID convention."""
-    child_run_id = f'pipeline__{parent_run_id}__{stage}'
-    return {'run_id': child_run_id, 'folder': run_folder(child_run_id)}
-
-
-def stage_operator(stage: Stage, configuration: StageConf | None = None) -> TriggerDagRunOperator:
-    """Trigger an existing stage and defer until success; propagate child failure to the pipeline.
-
-    Input is a stage name and small upstream directory references. The operator
-    creates an Airflow DAG run, without copying files or creating asset events.
-    Waiting uses the triggerer rather than occupying a processing worker slot.
-    """
-    return TriggerDagRunOperator(
-        task_id=stage, trigger_dag_id=f'radiofrance_{stage}',
-        trigger_run_id=f"{{{{ ti.xcom_pull(task_ids='prepare_pipeline')['{stage}']['run_id'] }}}}",
-        conf=dict(configuration or {}), wait_for_completion=True, deferrable=True,
-        fail_when_dag_is_paused=True, reset_dag_run=False, skip_when_already_exists=False,
-        allowed_states=['success'], failed_states=['failed'], poke_interval=15,
-        execution_timeout=timedelta(hours=4),
-        doc_md=f'Trigger radiofrance_{stage} with this pipeline run’s explicit child identity and upstream directory. Wait without holding a worker slot. Continue only after child success; fail if the stage fails or is paused. Existing child runs are never reset automatically.',
-    )
+SHOW_CHOICES = read_show_choices()
 
 
 with DAG(
     dag_id='radiofrance_pipeline',
-    description='Run the configured show from download through verified database loading.',
+    description='Select registered shows or add programme URLs, process each show, then refresh HTML.',
     doc_md="""
-## Purpose and flow
-One manually triggered pipeline run coordinates the existing radiofrance_download,
-radiofrance_chunk, radiofrance_embedding and radiofrance_database DAGs in that order.
-Each stage must finish successfully, including its verification task, before the
-next starts. Processing logic stays in those DAGs and their container jobs.
+## Trigger form
+Select one or more slugs in shows (an array of strings), choose all_enabled, or
+provide new_show_url (an array of HTTPS Radio France programme URLs).
+The selection is their union. At least one option is required. The initial task
+validates URLs and registers missing shows transactionally in the show table,
+then freezes the exact selection in XCom. A short read-only registry query populates
+the multi-select suggestions during parsing; failures leave the DAG available.
+Suggestions are refreshed on the next parse and runtime selection is revalidated.
 
-`prepare_pipeline` returns explicit child run IDs and artifact folder names. Each
-stage receives the exact folder produced by its predecessor, never the newest
-folder found on disk. The child jobs already derive output directories from their
-run IDs; this DAG uses the same convention. Metadata XCom contains references only.
-
-## Configuration and running
-Follow airflow/DEPLOYMENT.md and build the four processing images. The API key,
-model cache, application database and host mounts are configured through .env. Enable
-this DAG AND all four child DAGs in the UI, then trigger radiofrance_pipeline
-without parameters. A running scheduler and triggerer are required. Deferrable
-waits release worker slots so child tasks can run with the current parallelism.
-RF_SHOW selects the show (default mecaniques-du-journalisme). Optional
-RF_EPISODE_SELECTION enables a fixed integration sample for an empty show in the
-application database. Normal downloads read the show's committed database cutoff
-and publish JSON metadata deltas; CSV baselines are not used. The cutoff advances
-only when the final database task successfully commits the run.
+## Flow and configuration
+select_shows queues one process_episodes run per selected show.
+That coordinator has max_active_runs=1, so only one show's processing chain can
+be active at once. Enable it, the four stage DAGs and this parent. Apply
+ database/init/40-shows.sql to existing databases and rebuild all images.
+Compose provides application DB credentials and Docker/model settings.
 
 ## Outputs and recovery
-Artifacts remain in the normal download-pilot, chunk-pilot and embedding-pilot
-run directories. The final child imports their complete lineage transactionally
-and verifies the committed database records. No extra copies or asset events are
-created. Empty updates flow through all stages as successful empty work.
-Automatic retries and child resets are disabled. If a stage fails, downstream
-stages do not start. Inspect the linked child run. A fresh pipeline run creates
-fresh child IDs/folders and is the simplest whole-pipeline retry. Do not clear a
-completed parent trigger to rerun an immutable producing stage: it intentionally
-refuses an existing child run. Individual stage DAGs remain available for manual
-recovery using their documented explicit run parameters. If a pipeline times out,
-check child status before retrying; a parent timeout does not cancel child work.
+Each show has data/runs/<UTC timestamp>/download/<show> metadata and explicit shared
+corpus references. Chunk/embedding completion directories end in --<show>.
+Successful shows commit independently; a failed show leaves those commits intact
+and does not prevent other already queued shows from running. The parent fails
+if any show fails. catalogue runs once only if all selected shows succeed, using
+all committed episodes. A new parent run reuses files and database cutoffs.
+Registered URLs persist even if acquisition later fails. URL syntax is validated
+before registration; the live API determines whether a programme actually exists.
+Automatic retries and child resets are disabled. See docs/storage.md.
 """,
+    params=ParamsDict({
+        'shows': Param([], type='array', items={'type': 'string'}, examples=SHOW_CHOICES,
+            title='Shows',
+            description='Select one or more registered shows. Choices refresh when Airflow reloads this DAG.'),
+        'all_enabled': Param(False, type='boolean', description='Process all enabled shows in the registry.'),
+        'new_show_url': Param([], type='array', items={'type': 'string'}, title='New show URLs',
+            description='Register and process new shows: https://www.radiofrance.fr/<station>/podcasts/<show>'),
+    }),
     schedule=None, catchup=False, max_active_runs=1,
-    dagrun_timeout=timedelta(hours=6), default_args={'retries': 0},
-    tags=['radiofrance', 'pipeline'],
+    default_args={'retries': 0}, tags=['radiofrance', 'pipeline'],
 ) as dag:
     @task(multiple_outputs=False)
-    def prepare_pipeline(run_id: str) -> PipelineRuns:
-        """Return child run identities and folder references for this parent run.
+    def select_shows(params: Mapping[str, object], run_id: str) -> list[ShowRequest]:
+        """Validate trigger options, register new shows, and return frozen child requests.
 
-        Input is Airflow's run_id. Output is a small typed XCom mapping consumed by
-        the trigger tasks. Read/write no files, secrets, database data or models.
-        Different parent runs receive distinct artifact directories.
+        Inputs are the shows/all_enabled/new_show_url form fields and parent
+        run ID. Writes only the application show registry in one transaction.
+        Returns public slugs, URLs and explicit child IDs; no credentials or model
+        data enter XCom. Empty/unknown selections fail before downloads start.
         """
-        return {'download': run_reference(run_id, 'download'), 'chunk': run_reference(run_id, 'chunk'),
-            'embedding': run_reference(run_id, 'embedding'), 'database': run_reference(run_id, 'database')}
+        password = os.environ.get('RF_DATABASE_PASSWORD', '')
+        if not password:
+            raise ValueError('Configure RF_DATABASE_PASSWORD in Compose')
+        dsn = make_dsn(host=os.environ.get('RF_DATABASE_HOST', 'postgres'),
+            port=os.environ.get('RF_DATABASE_PORT', '5432'), dbname='radiofrance',
+            user='radiofrance', password=password)
+        if dsn is None:
+            raise ValueError('Could not construct application database connection')
+        selection: ProgrammeSelection = {'shows': cast(list[str], params['shows']),
+            'all_enabled': cast(bool, params['all_enabled']),
+            'new_show_url': cast(list[str], params['new_show_url'])}
+        programmes = resolve_programmes(selection, dsn)
+        print('Selected shows: ' + ', '.join(item['slug'] for item in programmes))
+        return [{'trigger_run_id': f"shows__{run_id}__{item['slug']}",
+                 'conf': {'show': item['slug'], 'show_url': item['url']}} for item in programmes]
 
-    references = prepare_pipeline()  # pyright: ignore[reportCallIssue]
-    download = stage_operator('download')
-    chunk = stage_operator('chunk', {'download_run': "{{ ti.xcom_pull(task_ids='prepare_pipeline')['download']['folder'] }}"})
-    embedding = stage_operator('embedding', {'chunk_run': "{{ ti.xcom_pull(task_ids='prepare_pipeline')['chunk']['folder'] }}"})
-    database = stage_operator('database', {'embedding_run': "{{ ti.xcom_pull(task_ids='prepare_pipeline')['embedding']['folder'] }}"})
-    _ = references >> download >> chunk >> embedding >> database
+    requests = select_shows()  # pyright: ignore[reportCallIssue]
+    shows = TriggerDagRunOperator.partial(
+        task_id='process_shows', trigger_dag_id='process_episodes',
+        wait_for_completion=True, deferrable=True, fail_when_dag_is_paused=True,
+        reset_dag_run=False, skip_when_already_exists=False,
+        allowed_states=['success'], failed_states=['failed'], poke_interval=15,
+        doc_md='Queue one explicit single-show coordinator per frozen registry selection. '
+            'The coordinator max_active_runs=1 serializes full show chains. Defer while waiting; '
+            'any failure fails the parent, and catalogue runs only after all successes.',
+    ).expand_kwargs(requests)
+    catalogue = DockerOperator(
+        task_id='catalogue', image='radiofrance-database:dev',
+        entrypoint=['python', '-m', 'radiofrance.jobs.catalogue'],
+        command=['--output-dir', '/data/catalogue', '--replace'],
+        docker_url='unix://var/run/docker.sock', api_version='auto',
+        mounts=[Mount('/data', f'{os.environ.get("RF_PROJECT_ROOT") or "/not-configured"}/data', type='bind')],
+        environment={'PGHOST': os.environ.get('RF_DATABASE_HOST', 'postgres'),
+            'PGPORT': os.environ.get('RF_DATABASE_PORT', '5432'),
+            'PGDATABASE': 'radiofrance', 'PGUSER': 'radiofrance'},
+        private_environment={'PGPASSWORD': os.environ.get('RF_DATABASE_PASSWORD', '')},
+        user=f"{os.environ.get('RF_UID', '1000')}:{os.environ.get('RF_GID', '1000')}",
+        network_mode=os.environ.get('RF_DOCKER_NETWORK', 'radiofrance_default'),
+        mount_tmp_dir=False, auto_remove='force', do_xcom_push=False, mem_limit='1g',
+        execution_timeout=timedelta(minutes=15),
+        doc_md='After verified database loading, read all committed episode metadata in a read-only snapshot. '
+            'Refresh the shared static HTML catalogue and count manifest under data/catalogue, '
+            'using the host UID/GID. No database writes, model inference or web publication. '
+            'A failure leaves the successful database import intact; a fresh pipeline run can regenerate the site.',
+    )
+    _ = shows >> catalogue

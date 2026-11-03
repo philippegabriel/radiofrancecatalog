@@ -1,3 +1,5 @@
+For the current artifact layout and upgrade rebuild commands, see [pipeline storage](../docs/storage.md).
+
 # Airflow with Docker Compose
 
 This setup starts Airflow and its PostgreSQL **metadata** database. The manual
@@ -141,7 +143,7 @@ The next `docker compose up -d --wait --wait-timeout 300` reuses them. Do not ad
 that would delete the history, login and generated files. No host catalogue or
 transcript directories are modified by the smoke test.
 
-## 5. Connect the pilot download container
+## 5. Connect the download container
 
 Run these commands from the project root. Keep `.OpenAPIKey` as a file
 containing the API key. The application database supplies the catalogue cutoff;
@@ -172,7 +174,7 @@ RF_DOCKER_GID=<output of stat -c '%g' /var/run/docker.sock>
 Build the updated download image and recreate Airflow:
 
 ```bash
-sudo docker build -f download/Dockerfile -t radiofrance-download:pilot .
+sudo docker build -f download/Dockerfile -t radiofrance-download:dev .
 sudo docker compose up -d --build --wait --wait-timeout 300
 ```
 
@@ -192,7 +194,7 @@ PostgreSQL using a read-only transaction on the Compose network. The database
 password is passed privately, and the API key is mounted read-only. The child
 writes outputs as your host UID/GID and is removed when finished. Its stdout
 appears in the task log; verification checks the show, metadata/transcript
-membership and artifact files. Outputs under `data/download-pilot/airflow-<run-id>/`
+membership and artifact files. Outputs under `data/runs/<UTC timestamp>/download/`
 contain `episodes.json`, raw transcripts and a version-2 manifest. No catalogue
 CSV is read or written. There are no S3 calls, asset events or DB writes here.
 
@@ -271,18 +273,21 @@ without manually entering upstream directory names. No database reset, model
 change or image rebuild is needed just to add this DAG. Airflow discovers it in
 the mounted `airflow/dags/` directory; refresh the UI after the next parse.
 
-Enable these five DAGs:
+Enable these six DAGs:
 
 - `radiofrance_pipeline`
+- `process_episodes`
 - `radiofrance_download`
 - `radiofrance_chunk`
 - `radiofrance_embedding`
 - `radiofrance_database`
 
-Trigger **radiofrance_pipeline** with no parameters. It runs:
+Apply the additive [show registry update](../docs/storage.md#existing-database-apply-the-additive-registry-update-once)
+to existing databases, then trigger **radiofrance_pipeline**. Select `shows`,
+`all_enabled`, and/or `new_show_url` in its form. It runs:
 
 ```text
-prepare_pipeline → download → chunk → embedding → database
+select_shows → process_shows (one complete show at a time) → catalogue
 ```
 
 Each stage task triggers its existing child DAG and waits for the entire child
@@ -294,10 +299,11 @@ list to inspect detailed processing logs. Child run IDs have a `pipeline__` pref
 and identify the parent through its readable run ID.
 
 The pipeline passes explicit run-directory references; it never scans for the
-latest output. Files remain in `data/download-pilot`, `data/chunk-pilot` and
-`data/embedding-pilot`. The final database stage follows that exact artifact chain.
-Each parent run uses distinct child run IDs and producing-stage directories.
-`RF_SHOW` selects the show (default `mecaniques-du-journalisme`). Downloads read
+latest output. Corpus files accumulate in the shared transcript, chunk and embedding directories
+described in [storage](../docs/storage.md). The final database stage follows that exact artifact chain.
+Each parent run uses distinct child IDs and a readable UTC timestamp for its completion records.
+The trigger form selects the shows and passes each show and URL explicitly.
+`RF_SHOW` is only a legacy default for standalone downloads. Downloads read
 its committed PostgreSQL cutoff and publish only a JSON metadata delta and new
 transcripts. The final database commit advances the cutoff. A second pipeline run
 skips already-loaded IDs, including those at the latest timestamp. Database imports
@@ -323,3 +329,23 @@ venv/airflow/bin/pyright
 
 These verify ordering, failure/wait settings and rendered artifact handoffs. A
 live whole-pipeline run requires the host Docker daemon and Radio France API.
+
+### Generate the HTML catalogue at the end of the pipeline
+
+The parent `radiofrance_pipeline` now ends with `catalogue`, after the database
+child DAG succeeds, including its verification. Create the output mount as the
+project owner and rebuild the database image before using this task:
+
+```bash
+mkdir -p data/catalogue
+sudo docker compose build database-loader
+```
+
+The task runs with `RF_UID`/`RF_GID`, uses the existing Compose database network
+and private application password, and refreshes the shared pages under `data/catalogue`.
+Open `data/catalogue/index.html` directly. It lists every committed show, not only
+the show updated by this pipeline run. No additional DAG needs to be enabled.
+See database/README.md for standalone generation and recovery behavior.
+
+Multi-show selection, new URL registration, per-show paths and failure behavior
+are documented in [pipeline storage](../docs/storage.md#select-shows-or-register-new-ones).

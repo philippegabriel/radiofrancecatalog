@@ -15,7 +15,7 @@ The [chunking stage](chunking/README.md) processes a selected completed download
 run through a separate, network-disabled container.
 
 See the [deployment architecture](docs/deployment-architecture.md) and the
-[download container pilot](download/README.md) for the next deployment milestone.
+[download container](download/README.md) for acquisition details.
 
 The application schema is defined in [20-application-schema.sql](database/init/20-application-schema.sql).
 See the [database guide](database/README.md) for initialization and loading.
@@ -30,7 +30,8 @@ and a dedicated application login. The [transactional loader](database/README.md
 loads a verified artifact chain. The `radiofrance_database` DAG runs the loader
 and checks the committed results; see [Airflow loading](database/README.md#airflow-loading--increment-3).
 
-Trigger `radiofrance_pipeline` to run download → chunk → embedding → database
+Trigger `radiofrance_pipeline`, select registered shows or enter new programme URLs,
+to run download → chunk → embedding → database → catalogue
 with automatic, explicit artifact handoffs. See [running the complete pipeline](airflow/DEPLOYMENT.md#run-the-complete-pipeline).
 
 [Code validation](ci/README.md) runs Pyright, DAG/configuration checks and the
@@ -42,3 +43,15 @@ metadata deltas plus raw transcript JSON. Catalogue CSV baselines and merges are
 no longer part of the pipeline. Chunk CSVs and embedding NPY files remain stage
 artifacts. See the [download contract](download/README.md) for retry semantics,
 container rebuild commands and fixed-sample integration.
+
+The pipeline finishes by generating a static HTML catalogue from PostgreSQL under
+`data/catalogue/`. Open its `index.html` to browse all committed shows and
+episodes. See [database/README.md](database/README.md#html-catalogue-export) for
+setup and standalone export commands.
+
+See [pipeline storage and upgrade instructions](docs/storage.md) for shared corpus
+directories and readable UTC run names.
+
+The initial pipeline task registers new programmes in the `"show"` table.
+[Multi-show selection and the additive database update](docs/storage.md#select-shows-or-register-new-ones)
+require no database reset. Selected shows process sequentially and HTML is generated once.

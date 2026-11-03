@@ -33,7 +33,7 @@ class LocalDownloadTests(unittest.TestCase):
         mounts = {mount['Target']: mount for mount in dag_module.download.mounts}
         self.assertTrue(mounts['/run/secrets/radiofrance-api-key']['ReadOnly'])
         self.assertNotIn('/input/baseline.csv', mounts)
-        self.assertFalse(mounts['/output']['ReadOnly'])
+        self.assertFalse(mounts['/data']['ReadOnly'])
 
     def test_verification_detects_corruption_and_traversal(self) -> None:
         """Verify artifact bytes against the manifest and reject paths outside the output."""
@@ -63,6 +63,17 @@ class LocalDownloadTests(unittest.TestCase):
                 with patch.dict(os.environ, {'RF_DATABASE_PASSWORD': ''}):
                     with self.assertRaisesRegex(ValueError, 'RF_DATABASE_PASSWORD'):
                         dag_module.prepare_download.function('manual-run')
+
+    def test_explicit_new_show_is_not_limited_to_environment_default(self) -> None:
+        """Accept a registered new URL and keep its requested per-show folder."""
+        with tempfile.TemporaryDirectory() as temporary:
+            options = {'show': 'new-show',
+                'show_url': 'https://www.radiofrance.fr/franceculture/podcasts/new-show',
+                'output_folder': '2026-11-03_14-30-00-000000Z/download/new-show'}
+            with patch.dict(os.environ, {'RF_PROJECT_ROOT': '/host/project', 'RF_DATABASE_PASSWORD': 'test'}), patch.object(dag_module, 'HOST', '/host/project'), patch.object(dag_module, 'OUTPUT', Path(temporary)):
+                self.assertEqual(dag_module.prepare_download.function('manual', options), options['output_folder'])
+                with self.assertRaisesRegex(ValueError, 'does not match'):
+                    dag_module.prepare_download.function('manual', {**options, 'show': 'wrong-show'})
 
     def test_preflight_does_not_accept_missing_configuration(self) -> None:
         """Fail before container creation when the host path was not configured."""

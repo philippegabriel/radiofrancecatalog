@@ -1,10 +1,12 @@
 """Prepare and drive a disposable GitHub-hosted Airflow integration environment."""
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import stat
+import shutil
 import subprocess
 import sys
 import time
@@ -16,11 +18,12 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from radiofrance.libs.episode_selection import read_selection
+from radiofrance.libs.storage import CHUNK_DIRECTORY, EMBEDDING_DIRECTORY
 
 FIXTURE = ROOT / 'ci/fixtures/le-cours-de-l-histoire.json'
 SHOW = 'le-cours-de-l-histoire'
 DAGS = ('radiofrance_download', 'radiofrance_chunk', 'radiofrance_embedding',
-        'radiofrance_database', 'radiofrance_pipeline')
+        'radiofrance_database', 'process_episodes', 'radiofrance_pipeline')
 
 
 
@@ -54,7 +57,7 @@ def prepare() -> None:
     selection = read_selection(FIXTURE, SHOW)
     if len(selection['episodes']) != 10:
         raise ValueError('Integration fixture must contain exactly ten episodes')
-    for directory in ('download-pilot', 'chunk-pilot', 'embedding-pilot'):
+    for directory in ('runs', 'transcripts', CHUNK_DIRECTORY + '/runs', EMBEDDING_DIRECTORY + '/runs', 'catalogue'):
         (ROOT / 'data' / directory).mkdir(parents=True, exist_ok=True)
     secret = ROOT / '.OpenAPIKey'
     with secret.open('x') as stream:
@@ -107,6 +110,7 @@ class AirflowClient:
 
 def run_pipeline(run_id: str, evidence: Path, timeout_seconds: int = 5400) -> None:
     """Unpause maintained stages, trigger the parent once, poll completion and verify exact DB membership."""
+    run_id = f'integration__{datetime.now(timezone.utc).isoformat()}__{run_id}'
     evidence.mkdir(parents=True, exist_ok=True)
     client = AirflowClient('http://127.0.0.1:8082')
     client.login()
@@ -121,7 +125,7 @@ def run_pipeline(run_id: str, evidence: Path, timeout_seconds: int = 5400) -> No
                     raise
                 time.sleep(5)
     client.request('POST', '/api/v2/dags/radiofrance_pipeline/dagRuns',
-        {'dag_run_id': run_id, 'logical_date': None, 'conf': {}})
+        {'dag_run_id': run_id, 'logical_date': None, 'conf': {'shows': [SHOW], 'all_enabled': False, 'new_show_url': []}})
     path = '/api/v2/dags/radiofrance_pipeline/dagRuns/' + quote(run_id, safe='')
     deadline = time.monotonic() + timeout_seconds
     previous = ''
@@ -148,6 +152,17 @@ def run_pipeline(run_id: str, evidence: Path, timeout_seconds: int = 5400) -> No
     (evidence / 'database-verification.log').write_text(checked.stdout + checked.stderr)
     if checked.returncode:
         raise RuntimeError('Database integration assertions failed; inspect database-verification.log')
+    site = ROOT / 'data/catalogue'
+    catalogue = json.loads((site / 'manifest.json').read_text())
+    if catalogue['episode_count'] != 10 or catalogue['shows'] != {SHOW: 10}:
+        raise RuntimeError('HTML catalogue counts differ from the fixed sample')
+    html = (site / f'{SHOW}.html').read_text()
+    for episode in selection['episodes']:
+        if f'data-episode-id="{episode["episode_id"]}"' not in html:
+            raise RuntimeError('HTML catalogue is missing a fixed episode')
+    if f'{SHOW}.html' not in (site / 'index.html').read_text():
+        raise RuntimeError('HTML catalogue index is missing its show link')
+    shutil.copytree(site, evidence / 'catalogue', dirs_exist_ok=True)
     summary: IntegrationSummary = {'pipeline_run_id': run_id, 'show': SHOW, 'episode_count': len(selection['episodes']),
         'episode_ids': [e['episode_id'] for e in selection['episodes']], 'status': 'verified'}
     (evidence / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
