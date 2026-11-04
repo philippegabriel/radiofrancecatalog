@@ -22,6 +22,7 @@ class Episode(TypedDict):
     title: str
     description: str
     url: str
+    show_url: str
 
 
 class CatalogueResult(TypedDict):
@@ -29,26 +30,23 @@ class CatalogueResult(TypedDict):
     shows: dict[str, int]
 
 
-STYLE = '''body{font-family:system-ui,sans-serif;max-width:1100px;margin:2rem auto;padding:0 1rem;color:#222}
-a{color:#0759a3}table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;padding:.7rem;border-bottom:1px solid #ddd}
-th{background:#eee}td:nth-child(3){white-space:pre-wrap}caption{text-align:left;margin:1rem 0}'''
-
-
 def page(title: str, body: str) -> str:
-    """Wrap already escaped page content in a complete, offline HTML document."""
+    """Wrap escaped content with the original catalogue stylesheet and local logo."""
     return ('<!doctype html>\n<html lang="fr"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f'<title>{escape(title)}</title><style>{STYLE}</style></head><body>'
+        f'<title>{escape(title)}</title><link rel="stylesheet" href="index.css"></head><body>'
+        '<img src="Logo_Radio_France.svg.webp" alt="Radio France">'
         f'<h1>{escape(title)}</h1>{body}</body></html>\n')
 
 
-def episode_row(episode: Episode) -> str:
-    """Escape catalogue text and allow only HTTP(S) links from source metadata."""
+def episode_row(episode: Episode, number: int) -> str:
+    """Render numbered metadata columns, escaping text and restricting links to HTTP(S)."""
     title = escape(episode['title'])
     if urlsplit(episode['url']).scheme.lower() in ('http', 'https'):
         title = f'<a href="{escape(episode["url"], quote=True)}">{title}</a>'
     return (f'<tr data-episode-id="{escape(episode["episode_id"], quote=True)}">'
-        f'<td>{escape(episode["date"])}</td><td>{title}</td>'
+        f'<th scope="row">{number}</th><td>{escape(episode["date"])}</td>'
+        f'<td>{title}</td>'
         f'<td>{escape(episode["description"])}</td></tr>\n')
 
 
@@ -68,7 +66,7 @@ def export_catalogue(output_dir: Path, dsn: str = '', replace: bool = False) -> 
         with connection, connection.cursor() as cursor:
             cursor.execute(files('radiofrance.sql').joinpath('catalogue_html.sql').read_text())
             episodes: list[Episode] = [{'episode_id': row[0], 'show': row[1],
-                'date': row[2], 'title': row[3], 'description': row[4], 'url': row[5]}
+                'date': row[2], 'title': row[3], 'description': row[4], 'url': row[5], 'show_url': row[6]}
                 for row in cursor.fetchall()]
     grouped: dict[str, list[Episode]] = {}
     for episode in episodes:
@@ -80,18 +78,25 @@ def export_catalogue(output_dir: Path, dsn: str = '', replace: bool = False) -> 
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix='.catalogue-', dir=output_dir.parent))
     try:
+        for asset in ('index.css', 'Logo_Radio_France.svg.webp'):
+            (temporary / asset).write_bytes(files('radiofrance').joinpath('assets', asset).read_bytes())
         links: list[str] = []
         for show, rows in grouped.items():
             # podcast_title may contain an episode title, so it cannot name the show.
             title = show
-            body = ('<p><a href="index.html">Tous les programmes</a></p><table>'
+            body = ('<p><a href="index.html">Tous les programmes</a></p><table border="1" class="dataframe">'
                 f'<caption>{len(rows)} épisodes, du plus récent au plus ancien</caption>'
-                '<thead><tr><th>Date</th><th>Titre</th><th>Description</th></tr></thead><tbody>'
-                + ''.join(episode_row(row) for row in rows) + '</tbody></table>')
+                '<thead><tr><th></th><th>date</th><th>title</th><th>description</th></tr></thead><tbody>'
+                + ''.join(episode_row(row, number) for number, row in enumerate(rows)) + '</tbody></table>')
             (temporary / f'{show}.html').write_text(page(title, body), encoding='utf-8')
-            links.append(f'<li><a href="{show}.html">{escape(title)}</a> ({len(rows)})</li>')
+            show_link = escape(title)
+            if urlsplit(rows[0]['show_url']).scheme.lower() in ('http', 'https'):
+                show_link = f'<a href="{escape(rows[0]["show_url"], quote=True)}">{show_link}</a>'
+            links.append(f'<tr><td>{show_link}</td><td><a href="{show}.html">Episodes</a> ({len(rows)})</td></tr>')
         (temporary / 'index.html').write_text(page('Catalogue Radio France',
-            f'<p>{len(episodes)} épisodes</p><ul>{"".join(links)}</ul>'), encoding='utf-8')
+            f'<p>{len(episodes)} épisodes</p><table border="1" class="dataframe">'
+            '<thead><tr><th>Podcast URLs</th><th>Metadata index</th></tr></thead>'
+            f'<tbody>{"".join(links)}</tbody></table>' ), encoding='utf-8')
         (temporary / 'manifest.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
         temporary.chmod(0o755)
         if replace:

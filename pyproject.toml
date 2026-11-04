@@ -18,4 +18,5 @@ radiofrance = "src/radiofrance"
 "radiofrance.sql" = "database/sql"
 
 [tool.setuptools.package-data]
+"radiofrance" = ["assets/*"]
 "radiofrance.sql" = ["*.sql"]
