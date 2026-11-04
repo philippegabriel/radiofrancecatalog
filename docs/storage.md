@@ -163,9 +163,42 @@ radiofrance_pipeline
       radiofrance_embedding
       radiofrance_database
   catalogue                    task: refresh HTML after all shows succeed
+  monitor_run                  task: unified live log, parallel with processing
 ```
 
 `process_shows` is the trigger inside the parent, not another DAG. `process_episodes`
 is the child DAG it starts. Enable the renamed child before triggering a new parent
 run. Previous DAG names may remain visible as historical records; new runs target
 `process_episodes`. The processing order and shared corpus layout are unchanged.
+
+## Unified pipeline progress
+
+Open **radiofrance_pipeline → your run → monitor_run → Logs** to follow all
+selected shows in one place. The monitor starts after selection and checks every
+ten seconds, releasing its worker slot between polls. It logs changes in episode,
+transcript and chunk counts as completion manifests appear. Counts are run-scoped;
+missing stages are reported as unknown, not zero. Transcript counts include reused
+files; they mean transcripts available for this run, not newly downloaded files.
+
+Embedding updates distinguish new vectors from cached vectors. Model loading is
+reported before encoding. A provisional rate and remaining encoding-time estimate
+appear after ten new vectors; subsequent updates are published at each hundred.
+The rate measures encoding calls only, excluding model loading, artifact I/O and
+cached vectors. Short jobs report their rate at completion; all-cached/empty jobs
+have no measured rate. Final metrics include encoding and total job elapsed time.
+ETA is approximate and may vary with chunk length or other CPU activity.
+
+The embedding worker atomically replaces `<run>.progress.json` beside its run
+completion directory. This small sidecar persists alongside the manifest and is
+not itself proof of successful processing. The parent monitor's final XCom contains
+per-show metrics, combined totals and terminal processing states. Failed/skipped stages are logged
+explicitly and still fail/block the normal pipeline as appropriate. Cancellation
+of the parent also stops further monitor polling; use a fresh run for recovery.
+
+Build updated code before the next run:
+
+```bash
+sudo docker build -f embedding/Dockerfile -t radiofrance-embedding:dev .
+sudo docker compose build airflow
+sudo docker compose up -d --wait --wait-timeout 300 airflow
+```

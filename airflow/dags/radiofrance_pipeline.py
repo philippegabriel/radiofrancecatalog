@@ -3,14 +3,17 @@
 from collections.abc import Mapping
 from datetime import timedelta
 import os
+from pathlib import Path
 from typing import TypedDict, cast
 
-from airflow.sdk import DAG, Param, task
+from airflow.sdk import DAG, Param, task, PokeReturnValue, get_current_context
 from airflow.sdk.definitions.param import ParamsDict
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.providers.docker.operators.docker import DockerOperator
 from docker.types import Mount
 from psycopg2.extensions import make_dsn
+
+from radiofrance.libs.run_metrics import ShowMetrics, show_metrics, describe_metrics, run_totals
 
 from radiofrance.libs.programmes import ProgrammeSelection, resolve_programmes, read_show_choices
 
@@ -59,6 +62,16 @@ all committed episodes. A new parent run reuses files and database cutoffs.
 Registered URLs persist even if acquisition later fails. URL syntax is validated
 before registration; the live API determines whether a programme actually exists.
 Automatic retries and child resets are disabled. See docs/storage.md.
+
+## Unified live progress
+Open monitor_run > Logs in this parent run for all selected shows. It polls
+published manifests and atomic embedding progress every ten seconds, rescheduling
+between polls so it does not hold a worker slot. Missing stage counts are unknown,
+not zero. The first encoding-rate estimate appears after ten new vectors, then
+every hundred; model loading and cached vectors are excluded from encoding rate.
+The completion XCom contains per-show metrics and terminal processing states,
+including failed or skipped work. The monitor observes but does not hide failures.
+
 """,
     params=ParamsDict({
         'shows': Param([], type='array', items={'type': 'string'}, examples=SHOW_CHOICES,
@@ -125,4 +138,45 @@ Automatic retries and child resets are disabled. See docs/storage.md.
             'using the host UID/GID. No database writes, model inference or web publication. '
             'A failure leaves the successful database import intact; a fresh pipeline run can regenerate the site.',
     )
+    @task.sensor(poke_interval=10, timeout=7 * 24 * 3600, mode='reschedule')
+    def monitor_run(requests: list[ShowRequest], run_id: str) -> PokeReturnValue:
+        """Publish one live log for selected shows while child DAGs and catalogue run.
+
+        Read run-scoped manifests/sidecars from the read-only data mount and task
+        states through Airflow's SDK. Persist the last printed messages in XCom
+        between reschedules, logging the selected shows first and then only changes. Return final per-show metrics
+        and terminal states in XCom; failed stages remain failures in the parent.
+        No application DB access, model loading or artifact writes occur here.
+        """
+        ti = get_current_context().get('ti')
+        if ti is None:
+            raise RuntimeError('Airflow task context is required')
+        previous = cast(dict[str, str], ti.xcom_pull(task_ids='monitor_run', key='last_messages') or {})
+        metrics: dict[str, ShowMetrics] = {}
+        messages: dict[str, str] = {'selection': f'Selected shows ({len(requests)}): '
+            + ', '.join(request['conf']['show'] for request in requests)}
+        for request in requests:
+            show = request['conf']['show']
+            metrics[show] = show_metrics(Path('/opt/radiofrance/data'), request['trigger_run_id'], show)
+            messages[show] = describe_metrics(show, metrics[show])
+        all_states = ti.get_task_states(dag_id='radiofrance_pipeline', run_ids=[run_id],
+            task_ids=['process_shows', 'catalogue'])
+        states = cast(dict[str, str | None], all_states.get(run_id, {}))
+        messages['states'] = 'Processing states: ' + str(states)
+        for key, message in messages.items():
+            if previous.get(key) != message:
+                print(message, flush=True)
+        ti.xcom_push(key='last_messages', value=messages)
+        terminal = {'success', 'failed', 'upstream_failed', 'skipped', 'removed'}
+        expected = ['catalogue', *(f'process_shows_{index}' for index in range(len(requests)))]
+        done = all(states.get(key) in terminal for key in expected)
+        if done:
+            print('Run complete. Final metrics (unreported stages remain unknown):', flush=True)
+            for show, values in metrics.items():
+                print(describe_metrics(show, values), flush=True)
+            print('Run totals: ' + str(run_totals(metrics)), flush=True)
+            print('Final processing states: ' + str(states), flush=True)
+        return PokeReturnValue(is_done=done, xcom_value={'shows': metrics, 'totals': run_totals(metrics), 'states': states} if done else None)
+
+    monitoring = monitor_run(requests)  # pyright: ignore[reportArgumentType, reportCallIssue]
     _ = shows >> catalogue

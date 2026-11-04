@@ -10,6 +10,8 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import time
+from radiofrance.libs.progress import EmbeddingReporter
 from typing import Protocol, TypedDict, cast, NotRequired
 from radiofrance.libs.storage import artifact_root, publish, shared_metadata, EMBEDDING_DIRECTORY, MODEL_REVISION
 
@@ -226,6 +228,9 @@ def run_embedding(source_manifest: Path, output: Path, model_cache: Path, batch_
     network access occurs. With data_root, validated existing matrices are reused and
     only the stage manifest is run-specific. Failures remove staging, while already
     published corpus files remain reusable. Existing completion outputs are rejected.
+    A sibling <output-name>.progress.json sidecar exposes model loading, cached
+    counts, inference-only rate and ETA after ten vectors and then each hundred.
+    Completed metrics persist there; incomplete phases are not success markers.
     The optional encoder is an offline-test seam, never a CLI substitution.
     """
     if data_root is not None:
@@ -244,6 +249,9 @@ def run_embedding(source_manifest: Path, output: Path, model_cache: Path, batch_
         'max_tokens': MAX_TOKENS, 'batch_size': batch_size, 'threads': threads,
         'packages': {name: version(name) for name in ('torch', 'transformers', 'sentence-transformers')} if encoder is None and source['chunk_count'] else {}}
     output.parent.mkdir(parents=True, exist_ok=True)
+    cached_count = sum(item['chunk_count'] for item in source['chunks']
+        if data_root is not None and (data_root / EMBEDDING_DIRECTORY / f"{item['episode_id']}.npy").is_file())
+    progress = EmbeddingReporter(output, source['chunk_count'], cached_count)
     with tempfile.TemporaryDirectory(prefix='.embedding-job-', dir=output.parent) as temporary:
         staging = Path(temporary)
         artifacts: list[EmbeddingArtifact] = []
@@ -259,18 +267,23 @@ def run_embedding(source_manifest: Path, output: Path, model_cache: Path, batch_
                     'path': str(cached.relative_to(data_root)), 'chunk_count': len(rows)})
                 continue
             if rows and encoder is None:
+                progress.publish('loading_model')
                 encoder = SentenceEncoder(cached_snapshot(model_cache), batch_size, threads)
+                progress.publish('encoding')
             matrix = np.empty((len(rows), DIMENSIONS), dtype=np.float32)
             for offset in range(0, len(rows), batch_size):
                 if encoder is None:
                     raise RuntimeError('Missing encoder for nonempty source')
                 batch = rows[offset:offset+batch_size]
+                started = time.monotonic()
                 vectors = encoder.encode([row[-1] for row in batch])
+                encoding_seconds = time.monotonic() - started
                 if len(vectors) != len(batch):
                     raise ValueError('Model returned the wrong number of vectors')
                 for index, vector in enumerate(vectors, start=offset):
                     validate_vector(vector)
                     matrix[index] = vector
+                progress.encoded(len(batch), encoding_seconds)
             np.save(target, matrix, allow_pickle=False)
             artifacts.append({'episode_id': item['episode_id'], 'path': target.name,
                 'chunk_count': len(rows)})
@@ -295,6 +308,7 @@ def run_embedding(source_manifest: Path, output: Path, model_cache: Path, batch_
         readable_tree(staging)
         staging.rename(output)
     verify_output(output, source_manifest)
+    progress.publish('completed')
     return manifest
 
 

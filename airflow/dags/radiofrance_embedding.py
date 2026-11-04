@@ -49,7 +49,10 @@ read-only. Host UID/GID is used to publish shared data files.
 NPY files accumulate under data/embeddings/embeddinggemma2-fp32-256/
 segment-characters-v1-1000-300, one matrix per episode. The runs/<UTC timestamp>
 subdirectory contains a completion manifest only. Existing matrices are validated
-and reused without model inference. Empty runs need no model inference. A new run
+and reused without model inference. A sibling <run>.progress.json sidecar reports
+model loading and inference-only throughput after ten new vectors, then every
+hundred. radiofrance_pipeline.monitor_run reads it for unified parent logging;
+the final record contains generated/cached counts and duration. Empty runs need no model inference. A new run
 can resume from files already present; existing completion records are not overwritten.
 """,
     schedule=None, catchup=False, max_active_runs=1, default_args={'retries': 0},

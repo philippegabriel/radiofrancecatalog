@@ -26,7 +26,7 @@ class XcomReader:
 class PipelineTests(unittest.TestCase):
     def test_parent_resolves_and_queues_registry_selection(self) -> None:
         """Freeze public registry output and keep catalogue behind all mapped show successes."""
-        self.assertEqual(parent.dag.task_ids, ['select_shows', 'process_shows', 'catalogue'])
+        self.assertEqual(parent.dag.task_ids, ['select_shows', 'process_shows', 'catalogue', 'monitor_run'])
         self.assertEqual(parent.catalogue.upstream_task_ids, {'process_shows'})
         self.assertEqual(parent.dag.params['shows'], [])
         self.assertFalse(parent.dag.params['all_enabled'])
