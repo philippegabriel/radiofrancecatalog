@@ -5,7 +5,7 @@ WITH documents AS (
            NULL::integer AS strategy_id, NULL::integer AS chunk_no,
            NULL::double precision AS start_time, NULL::double precision AS end_time
     FROM episode_embedding v
-    JOIN rf r USING (episode_id)
+    JOIN episodes_external r USING (episode_id)
     JOIN episode_identity_external e ON e.id = v.episode_id
     JOIN embedding_model model ON model.id = v.model_id
     WHERE model.configuration @> %(configuration)s::jsonb

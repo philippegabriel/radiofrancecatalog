@@ -6,7 +6,7 @@ FROM jsonb_to_recordset(:'fixture'::jsonb->'episodes')
  AS e(episode_id text, segment_count integer);
 DO $$ BEGIN
  IF (SELECT count(*) FROM expected_episode) <> 10
-    OR (SELECT count(*) FROM rf) <> 10
+    OR (SELECT count(*) FROM episodes) <> 10
     OR (SELECT count(*) FROM transcript) <> 10
     OR (SELECT count(*) FROM import_run) <> 1 THEN
    RAISE EXCEPTION 'Expected one import of exactly ten catalogue episodes and transcripts';
@@ -14,7 +14,7 @@ DO $$ BEGIN
  IF EXISTS (
   SELECT 1 FROM expected_episode e
   LEFT JOIN episode_identity_external i ON i.external_id=e.episode_id
-  LEFT JOIN rf r ON r.episode_id=i.id
+  LEFT JOIN episodes_external r ON r.episode_id=i.id
   LEFT JOIN transcript t ON t.episode_id=i.id
   WHERE r.show IS DISTINCT FROM 'le-cours-de-l-histoire'
      OR t.segment_count IS DISTINCT FROM e.segment_count
@@ -28,7 +28,7 @@ DO $$ BEGIN
    RAISE EXCEPTION 'Invalid chunk/embedding counts, dimensions or normalization';
  END IF;
 END $$;
-SELECT (SELECT count(*) FROM rf) AS episodes,
+SELECT (SELECT count(*) FROM episodes) AS episodes,
  (SELECT count(*) FROM transcript_segment) AS segments,
  (SELECT count(*) FROM chunk_embedding) AS embeddings;
 ROLLBACK;

@@ -52,6 +52,10 @@ setup and standalone export commands.
 See [pipeline storage and upgrade instructions](docs/storage.md) for shared corpus
 directories and readable UTC run names.
 
-The initial pipeline task registers new programmes in the `"show"` table.
-[Multi-show selection and the additive database update](docs/storage.md#select-shows-or-register-new-ones)
+The initial pipeline task registers new programmes in the `shows` table.
+[Multi-show selection and database upgrades](docs/storage.md#select-shows-or-register-new-ones)
 require no database reset. Selected shows process sequentially and HTML is generated once.
+
+Episodes now reference the registry through `episodes.show_id → shows.id`. Existing
+databases need the [catalogue naming migration](database/CATALOGUE_NAMES_MIGRATION.md).
+The `episodes_external` view continues to expose text show slugs.

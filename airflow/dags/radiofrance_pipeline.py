@@ -36,7 +36,7 @@ with DAG(
 Select one or more slugs in shows (an array of strings), choose all_enabled, or
 provide new_show_url (an array of HTTPS Radio France programme URLs).
 The selection is their union. At least one option is required. The initial task
-validates URLs and registers missing shows transactionally in the show table,
+validates URLs and registers missing shows transactionally in shows,
 then freezes the exact selection in XCom. A short read-only registry query populates
 the multi-select suggestions during parsing; failures leave the DAG available.
 Suggestions are refreshed on the next parse and runtime selection is revalidated.
@@ -45,7 +45,8 @@ Suggestions are refreshed on the next parse and runtime selection is revalidated
 select_shows queues one process_episodes run per selected show.
 That coordinator has max_active_runs=1, so only one show's processing chain can
 be active at once. Enable it, the four stage DAGs and this parent. Apply
- database/init/40-shows.sql to existing databases and rebuild all images.
+ the upgrades in database/CATALOGUE_NAMES_MIGRATION.md to existing databases and rebuild
+the affected images. Fresh databases create the registry before episodes.
 Compose provides application DB credentials and Docker/model settings.
 
 ## Outputs and recovery

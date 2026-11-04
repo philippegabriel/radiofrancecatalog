@@ -1,7 +1,7 @@
 # Episode-description embeddings
 
 This stage searches episode metadata independently of transcript chunks. It uses
-`rf.title` plus `rf.description`; it does not embed programme descriptions.
+`episodes.title` plus `episodes.description`; it does not embed programme descriptions.
 Episodes with blank descriptions are excluded. The default export selects up to
 50 episodes deterministically, interleaving shows so one show cannot fill the
 sample. The exact selected IDs and source strings are saved in `selection.json`.

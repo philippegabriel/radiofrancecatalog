@@ -120,7 +120,7 @@ For different data or configuration, generate a new run directory.
 
 | Tables | Purpose |
 | --- | --- |
-| `episode_identity`, `rf` | Integer identities, external episode IDs and catalogue metadata |
+| `episode_identity`, `episodes` | Integer identities, external episode IDs and catalogue metadata |
 | `transcript`, `transcript_segment` | Transcript counts and ordered segments |
 | `chunk_strategy`, `chunk_set`, `semantic_chunk` | Configuration JSON, counts and chunk boundaries |
 | `embedding_model`, `embedding_set`, `chunk_embedding` | Model configuration and normalized 256D vectors |
@@ -202,8 +202,10 @@ pages are untouched, and nothing is published automatically to GitHub Pages.
 
 ## Show registry
 
-`database/init/40-shows.sql` creates the `"show"` table (slug, canonical URL, enabled)
-and seeds the six original shows. It is safe to apply to an existing database.
+`database/init/15-shows.sql` creates the `shows` table (integer identity ID, unique
+slug, canonical URL, enabled) and seeds the six original shows before episodes is created.
+`episodes.show_id` references that ID. Existing volumes require the
+[catalogue naming migration](CATALOGUE_NAMES_MIGRATION.md), not a replay of initialization.
 The pipeline trigger form can register new URLs and select one, several or all
 enabled shows. See [setup and usage](../docs/storage.md#select-shows-or-register-new-ones).
 Episode tables and existing cutoffs are preserved.

@@ -11,7 +11,7 @@ WITH documents AS (
            v.source_description AS description,
            1 - (v.embedding <=> :'queryvector'::vector(256)) AS similarity
     FROM episode_embedding v
-    JOIN rf r USING (episode_id)
+    JOIN episodes_external r USING (episode_id)
     JOIN episode_identity_external e ON e.id = v.episode_id
     JOIN embedding_model model ON model.id = v.model_id
     WHERE model.configuration @> '{
@@ -63,7 +63,7 @@ WITH best_per_episode AS (
     SELECT e.external_id AS episode_id, r.show, r.title, r.web_url,
            m.chunk_no, m.start_time, m.end_time, m.similarity, t.text
     FROM best_per_episode m
-    JOIN rf r ON r.episode_id = m.episode_id
+    JOIN episodes_external r ON r.episode_id = m.episode_id
     JOIN episode_identity_external e ON e.id = m.episode_id
     CROSS JOIN whitespace w
     CROSS JOIN LATERAL (

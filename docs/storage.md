@@ -93,7 +93,7 @@ is their deduplicated union:
 
 - `shows`: a multi-select populated from the show registry, storing slugs such as
   `["le-cours-de-l-histoire", "affaires-sensibles"]`.
-- `all_enabled`: select every enabled row in the `"show"` registry.
+- `all_enabled`: select every enabled row in the `shows` registry.
 - `new_show_url`: an array of canonical programme URLs, for example
   `["https://www.radiofrance.fr/franceculture/podcasts/un-nouveau-programme"]`.
   Replace the example with a real programme URL.
@@ -105,19 +105,13 @@ initial task's XCom. Unknown selected slugs fail with a message asking for their
 programme URLs. URL validation checks syntax and origin; the live API confirms
 actual availability. Registrations remain even if a later download fails.
 
-### Existing database: apply the additive registry update once
+### Existing database upgrades
 
-This does not reset the database or Airflow history. The script is also safe to
-rerun and does not overwrite an existing URL or enabled flag:
-
-```bash
-sudo docker compose exec -T postgres psql -U airflow -d radiofrance \
-  -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/40-shows.sql
-```
-
-Fresh volumes run the same script automatically. It seeds the six original
-shows, without querying their episode history. A show with no committed episodes
-starts from the beginning; existing shows retain their own cutoffs.
+Fresh volumes initialize the registry in `database/init/15-shows.sql`, before the
+application tables. Existing databases with text `rf.show` need the transactional
+[integer show-ID upgrade](../database/SHOW_ID_MIGRATION.md), not a replay of the
+first-start scripts. Then apply the [catalogue naming migration](../database/CATALOGUE_NAMES_MIGRATION.md). The guides include image rebuild, migration, verification
+and rollback commands. It preserves catalogue data and Airflow history.
 
 Rebuild the images using the upgrade commands above. Enable these six DAGs:
 `radiofrance_pipeline`, `process_episodes`, `radiofrance_download`,

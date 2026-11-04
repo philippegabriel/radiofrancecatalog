@@ -1,1 +1,1 @@
-SELECT slug, url, enabled FROM "show" ORDER BY slug;
+SELECT slug, url, enabled FROM shows ORDER BY slug;

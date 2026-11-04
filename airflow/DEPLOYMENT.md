@@ -282,7 +282,7 @@ Enable these six DAGs:
 - `radiofrance_embedding`
 - `radiofrance_database`
 
-Apply the additive [show registry update](../docs/storage.md#existing-database-apply-the-additive-registry-update-once)
+Apply the [catalogue naming upgrade](../database/CATALOGUE_NAMES_MIGRATION.md)
 to existing databases, then trigger **radiofrance_pipeline**. Select `shows`,
 `all_enabled`, and/or `new_show_url` in its form. It runs:
 

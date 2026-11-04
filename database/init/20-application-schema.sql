@@ -10,15 +10,20 @@ CREATE TABLE episode_identity (
 );
 CREATE VIEW episode_identity_external AS
  SELECT id, source_uuid::text || '_' || source_suffix::text AS external_id FROM episode_identity;
-CREATE TABLE rf (
+CREATE TABLE episodes (
  episode_id integer PRIMARY KEY REFERENCES episode_identity,
- show text NOT NULL, published_iso timestamptz, published_ts bigint NOT NULL,
+ show_id integer NOT NULL REFERENCES shows(id), published_iso timestamptz, published_ts bigint NOT NULL,
  title text, description text, web_url text, podcast_title text, podcast_url text, player_url text
 );
-CREATE VIEW rf_external AS
- SELECT r.*, e.external_id FROM rf r JOIN episode_identity_external e ON e.id=r.episode_id;
+CREATE INDEX episodes_show_id_idx ON episodes(show_id);
+CREATE VIEW episodes_external AS
+ SELECT r.episode_id, s.slug AS show, r.published_iso, r.published_ts,
+        r.title, r.description, r.web_url, r.podcast_title, r.podcast_url, r.player_url,
+        e.external_id
+ FROM episodes r JOIN shows s ON s.id=r.show_id
+ JOIN episode_identity_external e ON e.id=r.episode_id;
 CREATE TABLE transcript (
- episode_id integer PRIMARY KEY REFERENCES rf,
+ episode_id integer PRIMARY KEY REFERENCES episodes,
  segment_count integer NOT NULL CHECK(segment_count >= 0)
 );
 CREATE TABLE transcript_segment (

@@ -41,7 +41,7 @@ class DescriptionDatabaseTests(unittest.TestCase):
         self.assertEqual(job.load(first, self.dsn)['unchanged'], 1)
         with psycopg2.connect(self.dsn) as connection:
             with connection.cursor() as cursor:
-                cursor.execute("UPDATE rf SET title='New title'")
+                cursor.execute("UPDATE episodes SET title='New title'")
         with self.assertRaisesRegex(ValueError, 'metadata changed'):
             job.load(first, self.dsn)
         second = self.sample('second')
@@ -59,14 +59,14 @@ class DescriptionDatabaseTests(unittest.TestCase):
         manifest = json.loads((directory / 'manifest.json').read_text())
         with psycopg2.connect(self.dsn) as connection:
             with connection.cursor() as cursor:
-                cursor.execute("UPDATE rf SET description='Changed'")
+                cursor.execute("UPDATE episodes SET description='Changed'")
         with self.assertRaisesRegex(ValueError, 'metadata changed'):
             job.load(directory, self.dsn)
         with psycopg2.connect(self.dsn) as connection:
             with connection.cursor() as cursor:
                 cursor.execute('SELECT count(*) FROM episode_embedding')
                 self.assertEqual(cursor.fetchone(), (0,))
-                cursor.execute('UPDATE rf SET description=%s', (manifest['episodes'][0]['description'],))
+                cursor.execute('UPDATE episodes SET description=%s', (manifest['episodes'][0]['description'],))
         job.load(directory, self.dsn)
         with psycopg2.connect(self.dsn) as connection:
             with connection.cursor() as cursor:

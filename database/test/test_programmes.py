@@ -30,8 +30,8 @@ class ProgrammeRegistryTests(unittest.TestCase):
         self.dsn = os.environ['RF_TEST_DATABASE_DSN']
         with closing(psycopg2.connect(self.dsn)) as connection, connection:
             with connection.cursor() as cursor:
-                cursor.execute('TRUNCATE "show"')
-                cursor.execute('INSERT INTO "show"(slug,url,enabled) VALUES (%s,%s,true),(%s,%s,false)',
+                cursor.execute('TRUNCATE shows CASCADE')
+                cursor.execute('INSERT INTO shows(slug,url,enabled) VALUES (%s,%s,true),(%s,%s,false)',
                     ('known-show', 'https://www.radiofrance.fr/franceculture/podcasts/known-show',
                      'disabled-show', 'https://www.radiofrance.fr/franceinter/podcasts/disabled-show'))
 

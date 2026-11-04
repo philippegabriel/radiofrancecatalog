@@ -6,7 +6,7 @@ WITH best_per_episode AS (
     FROM chunk_embedding v
     JOIN semantic_chunk c USING (episode_id, strategy_id, chunk_no)
     JOIN embedding_model model ON model.id = v.model_id
-    JOIN rf r ON r.episode_id = c.episode_id
+    JOIN episodes_external r ON r.episode_id = c.episode_id
     WHERE model.configuration @> %(configuration)s::jsonb
       AND (%(show)s::text IS NULL OR r.show = %(show)s)
       AND (%(date_from)s::date IS NULL OR r.published_iso >= %(date_from)s::date)
@@ -23,7 +23,7 @@ WITH best_per_episode AS (
            r.published_iso::text AS published,
            m.strategy_id, m.chunk_no, m.start_time, m.end_time, m.similarity, t.text
     FROM best_per_episode m
-    JOIN rf r ON r.episode_id = m.episode_id
+    JOIN episodes_external r ON r.episode_id = m.episode_id
     JOIN episode_identity_external e ON e.id = m.episode_id
     CROSS JOIN whitespace w
     CROSS JOIN LATERAL (

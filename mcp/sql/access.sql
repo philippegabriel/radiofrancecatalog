@@ -9,6 +9,6 @@ ALTER ROLE radiofrance_mcp SET default_transaction_read_only = on;
 ALTER ROLE radiofrance_mcp SET statement_timeout = '60s';
 GRANT CONNECT ON DATABASE radiofrance TO radiofrance_mcp;
 GRANT USAGE ON SCHEMA public TO radiofrance_mcp;
-GRANT SELECT ON rf, episode_identity_external, transcript, transcript_segment,
+GRANT SELECT ON episodes, episodes_external, episode_identity_external, transcript, transcript_segment,
     semantic_chunk, embedding_model, chunk_embedding, episode_embedding TO radiofrance_mcp;
 COMMIT;

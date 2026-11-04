@@ -31,8 +31,10 @@ class CatalogueTests(unittest.TestCase):
                     cursor.execute('INSERT INTO episode_identity(source_uuid,source_suffix) VALUES (%s,5) RETURNING id',
                         (f'11111111-1111-4111-8111-{number:012d}',))
                     identity = cursor.fetchone()[0]
-                    cursor.execute('INSERT INTO rf(episode_id,show,published_ts,title,description,web_url,podcast_title) '
-                        'VALUES (%s,%s,%s,%s,%s,%s,%s)',
+                    cursor.execute('INSERT INTO shows(slug,url) VALUES (%s,%s) ON CONFLICT(slug) DO NOTHING',
+                        (show, f'https://www.radiofrance.fr/franceculture/podcasts/{show}'))
+                    cursor.execute('INSERT INTO episodes(episode_id,show_id,published_ts,title,description,web_url,podcast_title) '
+                        'VALUES (%s,(SELECT id FROM shows WHERE slug=%s),%s,%s,%s,%s,%s)',
                         (identity, show, timestamp, f'Title {number} <script>', 'Été & <img src=x>', url, 'Misleading episode title'))
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'site'

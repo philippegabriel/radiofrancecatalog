@@ -67,7 +67,7 @@ class DatabaseJobTests(unittest.TestCase):
         connection = psycopg2.connect(self.dsn)
         try:
             with connection.cursor() as cursor:
-                cursor.execute('SELECT (SELECT count(*) FROM import_run), (SELECT count(*) FROM rf), (SELECT count(*) FROM chunk_embedding)')
+                cursor.execute('SELECT (SELECT count(*) FROM import_run), (SELECT count(*) FROM episodes), (SELECT count(*) FROM chunk_embedding)')
                 return cast(tuple[int, int, int], cursor.fetchone())
         finally:
             connection.close()
@@ -124,6 +124,9 @@ class DatabaseJobTests(unittest.TestCase):
         identity = '11111111-1111-4111-8111-111111111111_5'
         row = episode(identity, 100)
         row['show'] = 'new-show'
+        from radiofrance.libs.programmes import resolve_programmes
+        resolve_programmes({'shows': [], 'all_enabled': False,
+            'new_show_url': ['https://www.radiofrance.fr/franceculture/podcasts/new-show']}, self.dsn)
         transcript: Transcript = {'transcript': [{'start': 0, 'end': 1, 'text': 'Texte partagé.'}]}
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory) / 'data'
@@ -233,7 +236,7 @@ class DatabaseJobTests(unittest.TestCase):
             connection = psycopg2.connect(self.dsn)
             try:
                 with connection.cursor() as cursor:
-                    cursor.execute('SELECT title FROM rf')
+                    cursor.execute('SELECT title FROM episodes')
                     self.assertEqual(cursor.fetchone(), ('Texte français.',))
             finally:
                 connection.close()

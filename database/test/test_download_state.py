@@ -29,7 +29,7 @@ class DownloadStateTests(unittest.TestCase):
                     cursor.execute('INSERT INTO episode_identity(source_uuid,source_suffix) VALUES (%s,5) RETURNING id',
                                    (f'11111111-1111-4111-8111-{index:012d}',))
                     identity = cursor.fetchone()[0]
-                    cursor.execute('INSERT INTO rf(episode_id,show,published_ts) VALUES (%s,%s,%s)', (identity, show, timestamp))
+                    cursor.execute('INSERT INTO episodes(episode_id,show_id,published_ts) VALUES (%s,(SELECT id FROM shows WHERE slug=%s),%s)', (identity, show, timestamp))
             self.assertEqual(read_download_state('affaires-sensibles', self.dsn)['cutoff_timestamp'], 0)
             connection.commit()
         state = read_download_state('affaires-sensibles', self.dsn)

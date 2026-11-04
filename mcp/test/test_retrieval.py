@@ -115,8 +115,11 @@ class DatabaseTests(unittest.TestCase):
                     cursor.execute('INSERT INTO episode_identity(source_uuid, source_suffix) VALUES (%s,5) RETURNING id', (uuid,))
                     episode = cursor.fetchone()[0]
                     text = 'Même passage.' if index < 2 else 'Autre passage.'
-                    cursor.execute('INSERT INTO rf(episode_id,show,published_ts,published_iso,title,description,web_url) '
-                                   'VALUES (%s,%s,1,%s,%s,%s,%s)',
+                    show = 'histoire' if index < 2 else 'science'
+                    cursor.execute('INSERT INTO shows(slug,url) VALUES (%s,%s) ON CONFLICT(slug) DO NOTHING',
+                                   (show, f'https://www.radiofrance.fr/franceculture/podcasts/{show}'))
+                    cursor.execute('INSERT INTO episodes(episode_id,show_id,published_ts,published_iso,title,description,web_url) '
+                                   'VALUES (%s,(SELECT id FROM shows WHERE slug=%s),1,%s,%s,%s,%s)',
                                    (episode, 'histoire' if index < 2 else 'science', '2026-10-01T12:00:00Z',
                                     'Titre', 'Description', '' if index == 0 else 'https://example.test/episode'))
                     cursor.execute('INSERT INTO transcript VALUES (%s,3)', (episode,))
@@ -179,7 +182,7 @@ class DatabaseTests(unittest.TestCase):
             connection.set_session(readonly=False)
             with connection.cursor() as cursor:
                 with self.assertRaises(psycopg2.ProgrammingError) as denied:
-                    cursor.execute("UPDATE rf SET title = 'changed'")
+                    cursor.execute("UPDATE episodes SET title = 'changed'")
                 self.assertEqual(denied.exception.pgcode, '42501')
         finally:
             connection.close()

@@ -4,7 +4,7 @@
 SET ROLE radiofrance;
 BEGIN;
 CREATE TABLE episode_embedding (
- episode_id integer NOT NULL REFERENCES rf,
+ episode_id integer NOT NULL REFERENCES episodes,
  model_id integer NOT NULL REFERENCES embedding_model,
  source_title text,
  source_description text NOT NULL,
