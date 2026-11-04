@@ -5,6 +5,7 @@ from collections.abc import Mapping
 import re
 from typing import Literal, TypedDict
 
+from radiofrance.libs.date_range import date_range
 from radiofrance.libs.runs import run_folder
 from radiofrance.libs.programmes import show_url as validate_show_url, read_show_choices, resolve_programmes, registry_dsn
 
@@ -30,6 +31,8 @@ class PipelineRuns(TypedDict):
 
 
 class StageConf(TypedDict, total=False):
+    from_date: str
+    to_date: str
     download_run: str
     chunk_run: str
     embedding_run: str
@@ -79,7 +82,9 @@ though the parent queues all requests. A failed show does not reset committed
 work; other queued shows can still run, and the parent reports any failure.
 
 ## Configuration and recovery
-The parent supplies show and show_url from the show registry. This DAG and
+The parent supplies show and show_url from the show registry, plus optional
+from_date/to_date inclusive Paris broadcast dates. Validate the range before
+triggering any stages and pass it only to download; downstream jobs use its manifest. This DAG and
 all four stages must be enabled. A bounded read-only registry query populates the
 show suggestions during parsing. Suggestions do not restrict newly registered
 shows passed by the parent before the next DAG refresh.
@@ -96,7 +101,10 @@ does so once after all selected shows succeed. See docs/storage.md.
 """,
     schedule=None, catchup=False, max_active_runs=1,
     dagrun_timeout=timedelta(hours=6), default_args={'retries': 0},
-    params=ParamsDict({'show': Param('', type='string', examples=SHOW_CHOICES, title='Show'),
+    params=ParamsDict({
+        'from_date': Param(None, type=['null', 'string'], format='date', description='Inclusive Paris broadcast date; optional historical selection.'),
+        'to_date': Param(None, type=['null', 'string'], format='date', description='Inclusive Paris broadcast date; leave both dates blank for incremental mode.'),
+        'show': Param('', type='string', examples=SHOW_CHOICES, title='Show'),
         'show_url': Param(None, type=['null', 'string'], title='Show URL', description='Optional override; leave blank to use the registered show URL.')}),
     tags=['radiofrance', 'internal'],
 ) as dag:
@@ -104,10 +112,11 @@ does so once after all selected shows succeed. See docs/storage.md.
     def prepare_pipeline(run_id: str, params: Mapping[str, str | None]) -> PipelineRuns:
         """Return stage identities and folder references for this parent run.
 
-        Input is Airflow's run_id. Output is a small typed XCom mapping consumed by
+        Inputs are Airflow's run_id, show and optional Paris date bounds. Output is a small typed XCom mapping consumed by
         the trigger tasks. Read/write no files, secrets, database data or models.
         Different parent runs receive distinct artifact directories.
         """
+        date_range(params.get('from_date'), params.get('to_date'))
         show = params.get('show') or ''
         if not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', show):
             raise ValueError('Invalid show slug')
@@ -120,7 +129,8 @@ does so once after all selected shows succeed. See docs/storage.md.
             'embedding': run_reference(run_id, 'embedding', show), 'database': run_reference(run_id, 'database', show)}
 
     references = prepare_pipeline()  # pyright: ignore[reportCallIssue]
-    download = stage_operator('download', {'show': '{{ params.show }}', 'show_url': "{{ ti.xcom_pull(task_ids='prepare_pipeline')['show_url'] }}",
+    download = stage_operator('download', {'from_date': "{{ params.get('from_date') or '' }}",
+        'to_date': "{{ params.get('to_date') or '' }}", 'show': '{{ params.show }}', 'show_url': "{{ ti.xcom_pull(task_ids='prepare_pipeline')['show_url'] }}",
         'output_folder': "{{ ti.xcom_pull(task_ids='prepare_pipeline')['download']['folder'] }}"})
     chunk = stage_operator('chunk', {'show': '{{ params.show }}',
         'output_folder': "{{ ti.xcom_pull(task_ids='prepare_pipeline')['chunk']['folder'] }}", 'download_run': "{{ ti.xcom_pull(task_ids='prepare_pipeline')['download']['folder'] }}"})

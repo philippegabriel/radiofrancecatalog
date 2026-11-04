@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from datetime import timedelta
 import os
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import TypedDict, cast, NotRequired
 
 from airflow.sdk import DAG, Param, task, PokeReturnValue, get_current_context
 from airflow.sdk.definitions.param import ParamsDict
@@ -13,12 +13,15 @@ from airflow.providers.docker.operators.docker import DockerOperator
 from docker.types import Mount
 from psycopg2.extensions import make_dsn
 
+from radiofrance.libs.date_range import date_range
 from radiofrance.libs.run_metrics import ShowMetrics, show_metrics, describe_metrics, run_totals
 
 from radiofrance.libs.programmes import ProgrammeSelection, resolve_programmes, read_show_choices
 
 
 class ShowConf(TypedDict):
+    from_date: NotRequired[str]
+    to_date: NotRequired[str]
     show: str
     show_url: str
 
@@ -38,6 +41,11 @@ with DAG(
 ## Trigger form
 Select one or more slugs in shows (an array of strings), choose all_enabled, or
 provide new_show_url (an array of HTTPS Radio France programme URLs).
+Optional from_date/to_date (YYYY-MM-DD) select inclusive Europe/Paris broadcast
+dates for every show. With either bound supplied, ignore the latest database
+watermark and skip all already committed episode IDs, allowing historical backfills.
+Leave both dates blank for normal incremental acquisition. Reversed/invalid ranges
+fail before show registration. Bounds are included in the unified monitor log.
 The selection is their union. At least one option is required. The initial task
 validates URLs and registers missing shows transactionally in shows,
 then freezes the exact selection in XCom. A short read-only registry query populates
@@ -74,6 +82,10 @@ including failed or skipped work. The monitor observes but does not hide failure
 
 """,
     params=ParamsDict({
+        'from_date': Param(None, type=['null', 'string'], format='date', title='From date',
+            description='Optional inclusive broadcast date, Europe/Paris. Explicit dates bypass the latest database cutoff.'),
+        'to_date': Param(None, type=['null', 'string'], format='date', title='To date',
+            description='Optional inclusive broadcast date, Europe/Paris. Leave both dates blank for incremental processing.'),
         'shows': Param([], type='array', items={'type': 'string'}, examples=SHOW_CHOICES,
             title='Shows',
             description='Select one or more registered shows. Choices refresh when Airflow reloads this DAG.'),
@@ -88,11 +100,12 @@ including failed or skipped work. The monitor observes but does not hide failure
     def select_shows(params: Mapping[str, object], run_id: str) -> list[ShowRequest]:
         """Validate trigger options, register new shows, and return frozen child requests.
 
-        Inputs are the shows/all_enabled/new_show_url form fields and parent
+        Inputs are the show selection, optional inclusive Paris dates and parent
         run ID. Writes only the application show registry in one transaction.
         Returns public slugs, URLs and explicit child IDs; no credentials or model
         data enter XCom. Empty/unknown selections fail before downloads start.
         """
+        bounds = date_range(cast(str | None, params.get('from_date')), cast(str | None, params.get('to_date')))
         password = os.environ.get('RF_DATABASE_PASSWORD', '')
         if not password:
             raise ValueError('Configure RF_DATABASE_PASSWORD in Compose')
@@ -106,8 +119,15 @@ including failed or skipped work. The monitor observes but does not hide failure
             'new_show_url': cast(list[str], params['new_show_url'])}
         programmes = resolve_programmes(selection, dsn)
         print('Selected shows: ' + ', '.join(item['slug'] for item in programmes))
-        return [{'trigger_run_id': f"shows__{run_id}__{item['slug']}",
-                 'conf': {'show': item['slug'], 'show_url': item['url']}} for item in programmes]
+        requests: list[ShowRequest] = []
+        for programme in programmes:
+            conf: ShowConf = {'show': programme['slug'], 'show_url': programme['url']}
+            if bounds['from_date']:
+                conf['from_date'] = bounds['from_date']
+            if bounds['to_date']:
+                conf['to_date'] = bounds['to_date']
+            requests.append({'trigger_run_id': f"shows__{run_id}__{programme['slug']}", 'conf': conf})
+        return requests
 
     requests = select_shows()  # pyright: ignore[reportCallIssue]
     shows = TriggerDagRunOperator.partial(
@@ -155,6 +175,11 @@ including failed or skipped work. The monitor observes but does not hide failure
         metrics: dict[str, ShowMetrics] = {}
         messages: dict[str, str] = {'selection': f'Selected shows ({len(requests)}): '
             + ', '.join(request['conf']['show'] for request in requests)}
+        if requests:
+            conf = requests[0]['conf']
+            messages['date_range'] = ('Date range (Europe/Paris): '
+                + f"{conf.get('from_date') or 'unbounded'} to {conf.get('to_date') or 'unbounded'}"
+                if conf.get('from_date') or conf.get('to_date') else 'Date selection: incremental database cutoff')
         for request in requests:
             show = request['conf']['show']
             metrics[show] = show_metrics(Path('/opt/radiofrance/data'), request['trigger_run_id'], show)

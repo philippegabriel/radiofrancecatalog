@@ -8,6 +8,7 @@ import re
 import tempfile
 import time
 from typing import TypedDict, NotRequired
+from radiofrance.libs.date_range import DateRange, date_range
 from radiofrance.libs.storage import publish, shared_metadata
 from radiofrance.libs.programmes import show_url as validate_show_url
 from radiofrance.libs.episode_selection import read_selection
@@ -27,6 +28,7 @@ class TranscriptArtifact(Artifact):
 
 
 class DownloadManifest(TypedDict):
+    date_range: NotRequired[DateRange]
     artifact_root: NotRequired[str]
     version: int
     show: str
@@ -44,7 +46,8 @@ def artifact(path: Path, root: Path) -> Artifact:
 
 def run_download(show: str, output: Path, api_key: str,
                  transcript_delay: float = 1.0, episode_selection: Path | None = None,
-                 dsn: str = '', data_root: Path | None = None, show_url: str | None = None) -> DownloadManifest:
+                 dsn: str = '', data_root: Path | None = None, show_url: str | None = None,
+                 from_date: str | None = None, to_date: str | None = None) -> DownloadManifest:
     """Read PostgreSQL's watermark, fetch a metadata delta and download its transcripts.
 
     The database is read only and closed before acquisition. Include the watermark
@@ -55,10 +58,17 @@ def run_download(show: str, output: Path, api_key: str,
     Publish episodes.json, raw transcripts and a version-2 manifest atomically;
     failure leaves the database watermark and final output unchanged. No database
     writes, catalogue CSVs, S3 publication or Airflow asset events occur here.
+    An explicit from_date/to_date selects inclusive Paris calendar days, bypasses
+    the latest watermark and skips all committed IDs, allowing older backfills.
+    Bounds are applied before transcript requests and recorded in the manifest.
     With data_root, reuse transcripts by episode ID and publish newly acquired
     JSON there. Only metadata and completion records are stored in output. Shared
     transcripts can survive failures and be reused before a database commit.
     """
+    bounds = date_range(from_date, to_date)
+    ranged = bounds['from_date'] is not None or bounds['to_date'] is not None
+    if ranged and episode_selection:
+        raise ValueError('Date ranges cannot be combined with a fixed episode selection')
     if data_root is not None:
         data_root = data_root.resolve()
         output = output.resolve()
@@ -76,17 +86,21 @@ def run_download(show: str, output: Path, api_key: str,
         raise ValueError('Transcript delay must be nonnegative')
     if output.exists():
         raise FileExistsError(f'Use a fresh output directory: {output}')
-    state = read_download_state(show, dsn)
+    state = read_download_state(show, dsn, include_all_ids=True) if ranged else read_download_state(show, dsn)
     cutoff = state['cutoff_timestamp']
     selection = read_selection(episode_selection, show) if episode_selection else None
     if selection and state['episode_count']:
         raise ValueError('Fixed episode selection requires an empty show in the database')
     query_cutoff = min(e['published_ts'] for e in selection['episodes']) - 1 if selection else max(0, cutoff - 1)
+    if ranged:
+        query_cutoff = bounds['start_timestamp'] - 1 if bounds['start_timestamp'] is not None else 0
+        print(f"Date range (Europe/Paris): {bounds['from_date'] or 'unbounded'} to {bounds['to_date'] or 'unbounded'}", flush=True)
     print(f"Database cutoff for {show}: {cutoff}; {state['episode_count']} committed episodes", flush=True)
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.download-job-', dir=output.parent) as staging:
         directory = Path(staging)
-        rows = fetch_all(api_key, programme['url'], since_ts=query_cutoff)
+        rows = (fetch_all(api_key, programme['url'], since_ts=query_cutoff, until_ts=bounds['end_timestamp'])
+                if ranged else fetch_all(api_key, programme['url'], since_ts=query_cutoff))
         expected = {e['episode_id']: e for e in selection['episodes']} if selection else {}
         if selection:
             selected = []
@@ -107,9 +121,14 @@ def run_download(show: str, output: Path, api_key: str,
             if timestamp is None or isinstance(timestamp, bool):
                 raise ValueError('Missing or invalid publication timestamp')
             published = int(timestamp)
-            if published < cutoff:
+            if ranged:
+                if ((bounds['start_timestamp'] is not None and published < bounds['start_timestamp']) or
+                        (bounds['end_timestamp'] is not None and published >= bounds['end_timestamp']) or
+                        row['id'] in existing):
+                    continue
+            if not ranged and published < cutoff:
                 raise ValueError('Download returned an episode before the database cutoff')
-            if not selection and published == cutoff and row['id'] in existing:
+            if not ranged and not selection and published == cutoff and row['id'] in existing:
                 continue
             metadata.append({'show': row['show'], 'id': row['id'], 'published_ts': published,
                 'published_iso': row['published_iso'], 'title': row['title'],
@@ -149,6 +168,8 @@ def run_download(show: str, output: Path, api_key: str,
             'episodes': artifact(episodes, directory),
             'transcripts': transcripts,
         }
+        if ranged:
+            manifest['date_range'] = bounds
         if data_root is not None:
             for item in transcripts:
                 local = directory / item['path']
@@ -162,6 +183,8 @@ def run_download(show: str, output: Path, api_key: str,
             shutil.rmtree(transcript_dir)
         (directory / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
         # TemporaryDirectory starts at 0700. Publish public podcast artifacts with
+        if ranged:
+            manifest['date_range'] = bounds
         # read/traverse permissions for Airflow's separate container user, even
         # under a restrictive umask. The API key is never copied into this tree.
         for path in directory.rglob('*'):
@@ -178,13 +201,16 @@ def main() -> None:
     parser.add_argument('--data-root', type=Path, help='Accumulate transcripts under this shared data directory')
     parser.add_argument('--show-url', help='Canonical registered programme URL')
     parser.add_argument('--output-dir', type=Path, required=True)
+    parser.add_argument('--from-date', help='Inclusive broadcast date in Europe/Paris: YYYY-MM-DD')
+    parser.add_argument('--to-date', help='Inclusive broadcast date in Europe/Paris: YYYY-MM-DD')
     parser.add_argument('--transcript-delay', type=float, default=1.0)
     parser.add_argument('--api-key-file', type=Path, help='Read a runtime-mounted key file instead of the environment')
     parser.add_argument('--episode-selection', type=Path, help='Fixed episode IDs and segment counts; requires an empty show in PostgreSQL')
     args = parser.parse_args()
     api_key = args.api_key_file.read_text(encoding='utf-8') if args.api_key_file else os.environ.get('RADIOFRANCE_API_KEY', '')
     manifest = run_download(args.show, args.output_dir,
-                            api_key, args.transcript_delay, args.episode_selection, data_root=args.data_root, show_url=args.show_url)
+                            api_key, args.transcript_delay, args.episode_selection, data_root=args.data_root, show_url=args.show_url,
+                            from_date=args.from_date, to_date=args.to_date)
     print(json.dumps(manifest, indent=2))
 
 

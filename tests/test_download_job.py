@@ -13,6 +13,8 @@ import radiofrance.fetch_transcripts as fetchtranscript
 import radiofrance.fetch_episodes as rf_dump
 from radiofrance.libs.catalogue import FIELDS, read_rows
 from radiofrance.libs.download_state import DownloadState
+from radiofrance.libs.date_range import date_range
+from radiofrance.libs.types import GraphQLData
 from radiofrance.libs.types import EpisodeRow, Transcript
 
 
@@ -30,6 +32,68 @@ class DownloadJobTests(unittest.TestCase):
         state = patch.object(job, 'read_download_state', return_value=self.state)
         self.read_state = state.start()
         self.addCleanup(state.stop)
+
+    def test_date_bounds_use_paris_midnights_including_dst(self) -> None:
+        """Use calendar boundaries rather than fixed 24-hour days; reject invalid ranges."""
+        for day, hours in [('2026-03-29', 23), ('2026-10-25', 25)]:
+            bounds = date_range(day, day)
+            assert bounds['start_timestamp'] is not None and bounds['end_timestamp'] is not None
+            self.assertEqual(bounds['end_timestamp'] - bounds['start_timestamp'], hours * 3600)
+        for first, last in [('2026-02-30', None), ('2026-2-01', None), ('2026-11-02', '2026-11-01')]:
+            with self.assertRaises(ValueError):
+                date_range(first, last)
+        self.assertIsNone(date_range('', None)['start_timestamp'])
+        self.assertIsNone(date_range(None, '2026-10-01')['start_timestamp'])
+        self.assertIsNone(date_range('2026-10-01', None)['end_timestamp'])
+
+    def test_historical_range_ignores_latest_cutoff_and_skips_committed_ids(self) -> None:
+        """Select only unimported episodes in inclusive dates before requesting transcripts."""
+        bounds = date_range('2026-10-01', '2026-10-01')
+        start, end = bounds['start_timestamp'], bounds['end_timestamp']
+        assert start is not None and end is not None
+        self.state.update(cutoff_timestamp=end + 100, episode_count=2, existing_ids=['old_5', 'future_5'])
+        rows = [episode('future_5', end + 100), episode('outside_5', end),
+                episode('last_5', end - 1), episode('old_5', start + 1),
+                episode('first_5', start), episode('before_5', start - 1)]
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(job, 'fetch_all', return_value=iter(rows)) as fetch, patch.object(job, 'fetch_transcript', return_value={'transcript': []}) as transcripts:
+                manifest = job.run_download('affaires-sensibles', Path(directory) / 'range', 'test', 0,
+                    from_date='2026-10-01', to_date='2026-10-01')
+            self.assertEqual(manifest['new_episode_count'], 2)
+            self.assertEqual(manifest.get('date_range'), bounds)
+            self.assertEqual([x['episode_id'] for x in manifest['transcripts']], ['first_5', 'last_5'])
+            self.assertEqual(transcripts.call_count, 2)
+            self.assertEqual(fetch.call_args.kwargs, {'since_ts': start - 1, 'until_ts': end})
+            self.read_state.assert_called_with('affaires-sensibles', '', include_all_ids=True)
+
+    def test_open_ended_dates_and_fixed_selection_conflict(self) -> None:
+        """One bound selects explicit mode; invalid/conflicting ranges fail before API calls."""
+        with tempfile.TemporaryDirectory() as directory, patch.object(job, 'fetch_all', return_value=iter([])) as fetch:
+            root = Path(directory)
+            job.run_download('affaires-sensibles', root / 'upper', 'test', to_date='2026-10-01')
+            self.assertEqual(fetch.call_args.kwargs['since_ts'], 0)
+            job.run_download('affaires-sensibles', root / 'lower', 'test', from_date='2026-10-01')
+            self.assertIsNone(fetch.call_args.kwargs['until_ts'])
+            with self.assertRaisesRegex(ValueError, 'fixed episode selection'):
+                job.run_download('affaires-sensibles', root / 'conflict', 'test', episode_selection=root / 'fixture.json', from_date='2026-10-01')
+            with self.assertRaises(ValueError):
+                job.run_download('affaires-sensibles', root / 'invalid', 'test', from_date='2026-10-02', to_date='2026-10-01')
+            self.assertEqual(fetch.call_count, 2)
+
+    def test_api_paginates_past_upper_bound_and_stops_at_lower_bound(self) -> None:
+        """Skip newer pages while retaining both boundary seconds of the requested interval."""
+        first: GraphQLData = {'diffusionsOfShowByUrl': {'edges': [
+            {'cursor': 'next-page', 'node': {'id': 'new_5', 'published_date': 400}}]}}
+        second: GraphQLData = {'diffusionsOfShowByUrl': {'edges': [
+            {'cursor': 'a', 'node': {'id': 'last_5', 'published_date': 399}},
+            {'cursor': 'b', 'node': {'id': 'first_5', 'published_date': 200}},
+            {'cursor': 'c', 'node': {'id': 'old_5', 'published_date': 199}}]}}
+        with patch.object(rf_dump, 'gql_post', side_effect=[first, second]) as post:
+            rows = list(rf_dump.fetch_all('test', 'https://www.radiofrance.fr/franceinter/podcasts/affaires-sensibles',
+                since_ts=199, until_ts=400, sleep_sec=0))
+        self.assertEqual([row['id'] for row in rows], ['last_5', 'first_5'])
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(post.call_args.args[3]['after'], 'next-page')
 
     def test_fixed_selection_enforces_membership_and_counts(self) -> None:
         """Keep exact IDs on an empty database; reject unavailable or changed transcripts."""

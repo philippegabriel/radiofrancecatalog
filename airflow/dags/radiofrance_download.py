@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from typing import TypedDict, cast
 
+from radiofrance.libs.date_range import date_range
 from radiofrance.libs.runs import run_folder
 from radiofrance.libs.storage import artifact_root
 from radiofrance.libs.catalogue import SHOWS, read_rows
@@ -74,10 +75,12 @@ Only radiofrance_pipeline coordinates all stages; this DAG performs acquisition 
 
 ## Configuration and running
 Build the download image and follow airflow/DEPLOYMENT.md. Parent conf selects show,
-show_url and output_folder; RF_SHOW is a standalone legacy default only;
+show_url, output_folder and optional inclusive from_date/to_date Paris dates; RF_SHOW is a standalone legacy default only;
 .env supplies the host project path, UID/GID, Docker network and private database
 password. The API-key file is a read-only secret mount. RF_EPISODE_SELECTION optionally
-selects the fixed integration fixture on an empty database. Trigger without parameters.
+selects the fixed integration fixture on an empty database and cannot be combined
+with date bounds. Explicit date ranges bypass the watermark and skip all committed
+IDs; no dates retains incremental behavior. Trigger without parameters for defaults.
 
 ## Outputs and recovery
 Write episodes.json and manifest.json under data/runs/<UTC timestamp>/download/<show>.
@@ -97,7 +100,7 @@ Existing download records are never overwritten. Automatic retries are disabled.
     def prepare_download(run_id: str, params: Mapping[str, str] | None = None) -> str:
         """Validate mounts and return an output-folder name derived from run_id.
 
-        Validate selected show/URL/output references and read mount metadata; create no files or network
+        Validate optional inclusive Paris dates and selected show/URL/output references and read mount metadata; create no files or network
         connections. The returned name is a small XCom reference, never secret data.
         """
         if not os.environ.get('RF_PROJECT_ROOT') or not Path(HOST).is_absolute():
@@ -109,6 +112,9 @@ Existing download records are never overwritten. Automatic retries are disabled.
         if not os.environ.get('RF_DATABASE_PASSWORD'):
             raise ValueError('RF_DATABASE_PASSWORD is required for the application database')
         options = params or {}
+        bounds = date_range(options.get('from_date'), options.get('to_date'))
+        if SELECTION and (bounds['from_date'] or bounds['to_date']):
+            raise ValueError('Date ranges cannot be combined with a fixed episode selection')
         show = options.get('show', SHOW)
         url = options.get('show_url') or f'https://www.radiofrance.fr/{SHOWS.get(show, "")}/podcasts/{show}'
         if show_url(url)['slug'] != show:
@@ -139,6 +145,8 @@ Existing download records are never overwritten. Automatic retries are disabled.
                  '--show-url', "{{ params.get('show_url') or 'https://www.radiofrance.fr/" + SHOWS.get(SHOW, '') + '/podcasts/' + SHOW + "' }}",
                  '--output-dir', "/data/runs/{{ ti.xcom_pull(task_ids='prepare_download') }}",
                  '--data-root', '/data',
+                 '--from-date', "{{ params.get('from_date') or '' }}",
+                 '--to-date', "{{ params.get('to_date') or '' }}",
                  '--api-key-file', '/run/secrets/radiofrance-api-key',
                  *(['--episode-selection', '/input/episode-selection.json'] if SELECTION else [])],
         mounts=[
@@ -155,7 +163,7 @@ Existing download records are never overwritten. Automatic retries are disabled.
         auto_remove='force',
         execution_timeout=timedelta(hours=1),
         do_xcom_push=False,
-        doc_md='Run the download image on the Compose network. Read the committed application database watermark in a read-only transaction, then fetch the delta via the Radio France APIs and publish JSON metadata/transcripts. The API-key file is mounted read-only; the database password is private and never placed in XCom. No database writes occur; nonzero exit fails the task.',
+        doc_md='Run the download image on the Compose network. Read the committed application database watermark in a read-only transaction, then select the incremental delta or explicit Paris date range, skipping committed IDs before transcripts, via the Radio France APIs and publish JSON metadata/transcripts. The API-key file is mounted read-only; the database password is private and never placed in XCom. No database writes occur; nonzero exit fails the task.',
     )
     checked = verify_download(folder)  # pyright: ignore[reportArgumentType]
     _ = folder >> download >> checked

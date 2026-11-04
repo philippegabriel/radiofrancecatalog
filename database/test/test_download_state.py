@@ -37,6 +37,10 @@ class DownloadStateTests(unittest.TestCase):
         self.assertEqual(state['episode_count'], 3)
         self.assertEqual(state['existing_ids'], ['11111111-1111-4111-8111-000000000001_5',
                                                 '11111111-1111-4111-8111-000000000002_5'])
+        historical = read_download_state('affaires-sensibles', self.dsn, include_all_ids=True)
+        self.assertEqual(len(historical['existing_ids']), 3)
+        self.assertIn('11111111-1111-4111-8111-000000000000_5', historical['existing_ids'])
+        self.assertEqual(historical['cutoff_timestamp'], 200)
         self.assertEqual(read_download_state('le-cours-de-l-histoire', self.dsn)['cutoff_timestamp'], 500)
         self.assertEqual(read_download_state("' OR true --", self.dsn)['episode_count'], 0)
 

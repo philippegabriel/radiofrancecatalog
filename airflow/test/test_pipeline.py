@@ -44,6 +44,29 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(pipeline.dag.dag_id, 'process_episodes')
         self.assertEqual(parent.shows.partial_kwargs['trigger_dag_id'], 'process_episodes')
 
+    def test_date_range_validation_and_child_handoff(self) -> None:
+        """Freeze dates for all shows and reject reversed ranges before registry writes."""
+        programmes = [{'slug': 'new-show', 'url': 'https://www.radiofrance.fr/franceculture/podcasts/new-show', 'enabled': True}]
+        options: dict[str, object] = {'shows': ['new-show'], 'all_enabled': False, 'new_show_url': [],
+            'from_date': '2026-10-01', 'to_date': '2026-10-31'}
+        with patch.dict(os.environ, {'RF_DATABASE_PASSWORD': 'test'}), patch.object(parent, 'resolve_programmes', return_value=programmes) as resolve:
+            requests = parent.select_shows.function(options, 'manual__2026-11-04T12:00:00+00:00')
+            self.assertEqual(requests[0]['conf'].get('from_date'), '2026-10-01')
+            self.assertEqual(requests[0]['conf'].get('to_date'), '2026-10-31')
+            resolve.reset_mock()
+            options['from_date'] = '2026-11-01'
+            with self.assertRaises(ValueError):
+                parent.select_shows.function(options, 'manual__test')
+            resolve.assert_not_called()
+        params = {'show': 'new-show', 'show_url': programmes[0]['url'],
+            'from_date': '2026-10-01', 'to_date': '2026-10-31'}
+        state = pipeline.prepare_pipeline.function('manual__2026-11-04T12:00:00+00:00', params)
+        download = copy.copy(pipeline.download)
+        download.render_template_fields({'ti': XcomReader(state), 'params': params})
+        assert download.conf is not None
+        self.assertEqual(download.conf['from_date'], '2026-10-01')
+        self.assertEqual(download.conf['to_date'], '2026-10-31')
+
     def test_single_show_selection_uses_registered_url_when_blank(self) -> None:
         """Select an existing show without manually copying its URL into the form."""
         url = 'https://www.radiofrance.fr/franceculture/podcasts/new-show'

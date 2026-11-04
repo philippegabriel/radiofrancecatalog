@@ -202,3 +202,43 @@ sudo docker build -f embedding/Dockerfile -t radiofrance-embedding:dev .
 sudo docker compose build airflow
 sudo docker compose up -d --wait --wait-timeout 300 airflow
 ```
+
+## Limit a run to broadcast dates
+
+The **radiofrance_pipeline** trigger form accepts optional **From date**
+(`from_date`) and **To date** (`to_date`) fields, using `YYYY-MM-DD`. Both dates
+are inclusive and interpreted in Europe/Paris, including daylight-saving changes.
+The same range applies to all selected shows and is shown in `monitor_run` logs.
+Invalid dates or a reversed range fail before show registration or downloads.
+
+- Leave both dates blank for the normal per-show database watermark/delta.
+- Set both dates to process a bounded period, such as `2026-10-01` through
+  `2026-10-31` for October only.
+- Set only From date to process that date onward, or only To date for everything
+  up to and including that day. A To-only selection can cover a large archive.
+
+With either date supplied, the downloader ignores the latest-date watermark and
+skips all IDs already committed for that show. This allows importing an older
+month after a newer month. Omitting dates afterward resumes from the latest
+committed date; it does not automatically fill older gaps. Use another explicit
+range to fill those gaps. Existing immutable transcripts/chunks/vectors remain
+reusable. No database migration is needed.
+
+The API is paginated newest-first. Newer out-of-range records are skipped while
+pagination continues; it stops when the lower bound is reached. The job checks
+bounds and committed IDs before acquiring transcripts. Downstream stages consume
+only the resulting download manifest, which records the selected dates and UTC
+bounds. Existing manifests remain readable. Date filtering does not cap chunks
+or guarantee a particular runtime; long episodes can still produce many chunks.
+The fixed-ID integration fixture cannot be combined with date ranges.
+
+To deploy this change, rebuild the download image and Airflow, then recreate
+Airflow after current runs finish:
+
+```bash
+sudo docker build -f download/Dockerfile -t radiofrance-download:dev .
+sudo docker compose build airflow
+sudo docker compose up -d --wait --wait-timeout 300 airflow
+```
+
+The download CLI supports the same optional `--from-date` and `--to-date` flags.

@@ -136,7 +136,13 @@ def fetch_all(
     page_size: int = 50,
     sleep_sec: float = 0.2,
     total_timeout: int = 90,
+    until_ts: int | None = None,
 ) -> Iterator[EpisodeRow]:
+    """Fetch newest-first pages after since_ts and before the exclusive until_ts.
+
+    Skip newer rows without stopping pagination; stop only after the lower bound.
+    The job converts inclusive Paris calendar dates into these second boundaries.
+    """
     session = make_session(total_timeout=total_timeout)
     after = None
     count = 0
@@ -172,6 +178,9 @@ def fetch_all(
                 and int(published_ts) <= since_ts
             ):
                 reached_cutoff = True
+                continue
+
+            if until_ts is not None and published_ts is not None and int(published_ts) >= until_ts:
                 continue
 
             yield {

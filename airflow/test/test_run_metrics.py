@@ -75,10 +75,11 @@ class RunMetricsTests(unittest.TestCase):
         ti = MagicMock()
         ti.xcom_pull.return_value = None
         ti.get_task_states.return_value = {run: {'process_shows_0': 'deferred', 'catalogue': None}}
-        requests: list[parent.ShowRequest] = [{'trigger_run_id': 'child', 'conf': {'show': 'test-show', 'show_url': 'https://example.org'}}]
+        requests: list[parent.ShowRequest] = [{'trigger_run_id': 'child', 'conf': {'show': 'test-show', 'show_url': 'https://example.org', 'from_date': '2026-10-01', 'to_date': '2026-10-31'}}]
         with patch.object(parent, 'get_current_context', return_value={'ti': ti}), patch.object(parent, 'show_metrics', return_value={'episodes': None, 'transcripts': None, 'chunks': None, 'embeddings': None}) as read, redirect_stdout(StringIO()) as output:
             self.assertFalse(parent.monitor_run.function(requests, run).is_done)
             self.assertIn('Selected shows (1): test-show', output.getvalue())
+            self.assertIn('Date range (Europe/Paris): 2026-10-01 to 2026-10-31', output.getvalue())
             self.assertEqual(read.call_args.args[1], 'child')
             ti.get_task_states.return_value = {run: {'process_shows_0': 'failed', 'catalogue': 'upstream_failed'}}
             result = parent.monitor_run.function(requests, run)
