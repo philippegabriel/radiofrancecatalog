@@ -1,5 +1,12 @@
 # Episode-description embeddings
 
+The normal pipeline uses the separate artifact-only
+`radiofrance_description_embedding` DAG before database loading. It reads the
+same download selection as transcript processing and requires no database access.
+The database stage imports both vector kinds together in one transaction.
+See [pipeline processing](storage.md#description-embeddings-in-the-normal-pipeline).
+The commands below are independent database-based backfill/experiment tools.
+
 This stage searches episode metadata independently of transcript chunks. It uses
 `episodes.title` plus `episodes.description`; it does not embed programme descriptions.
 Episodes with blank descriptions are excluded. The default export selects up to

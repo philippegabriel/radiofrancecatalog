@@ -273,13 +273,14 @@ without manually entering upstream directory names. No database reset, model
 change or image rebuild is needed just to add this DAG. Airflow discovers it in
 the mounted `airflow/dags/` directory; refresh the UI after the next parse.
 
-Enable these six DAGs:
+Enable these seven DAGs:
 
 - `radiofrance_pipeline`
 - `process_episodes`
 - `radiofrance_download`
 - `radiofrance_chunk`
 - `radiofrance_embedding`
+- `radiofrance_description_embedding`
 - `radiofrance_database`
 
 Apply the [catalogue naming upgrade](../database/CATALOGUE_NAMES_MIGRATION.md)

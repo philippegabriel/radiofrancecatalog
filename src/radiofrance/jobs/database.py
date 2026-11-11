@@ -7,12 +7,13 @@ import math
 import os
 from pathlib import Path
 import re
-from typing import TypedDict, cast
+from typing import TypedDict, cast, NotRequired
 
 import psycopg2
 from psycopg2 import sql
 from psycopg2.extensions import cursor as Cursor
 
+from radiofrance.jobs.description_embedding import Configuration as DescriptionConfiguration, verify_output as verify_descriptions
 from radiofrance.jobs.chunk import ChunkManifest, DownloadManifest, contained_file, validate_source, verify_output as verify_chunks
 from radiofrance.jobs.embedding import EmbeddingManifest, EmbeddingRow, read_vectors, verify_output as verify_embeddings
 from radiofrance.libs.storage import artifact_root
@@ -41,7 +42,16 @@ class Episode(TypedDict):
     embeddings: list[EmbeddingRow]
 
 
+class DescriptionRecord(TypedDict):
+    external_id: str
+    title: str
+    description: str
+    embedding: list[float]
+
+
 class Prepared(TypedDict):
+    descriptions: NotRequired[list[DescriptionRecord]]
+    description_configuration: NotRequired[DescriptionConfiguration]
     embedding_run: str
     chunk_run: str
     download_run: str
@@ -76,8 +86,9 @@ def source_run(root: Path, name: str) -> Path:
     return contained_file(root, f'{name}/manifest.json')
 
 
-def prepare(embedding_manifest: Path, chunk_root: Path, download_root: Path) -> Prepared:
-    """Read and validate the full lineage, catalogue, chunk text and vectors without DB access."""
+def prepare(embedding_manifest: Path, chunk_root: Path, download_root: Path,
+            description_manifest: Path | None = None) -> Prepared:
+    """Validate catalogue, transcripts and both vector kinds against the same download, without DB access."""
     embedding_manifest, chunk_root, download_root = (
         path.resolve() for path in (embedding_manifest, chunk_root, download_root))
     if embedding_manifest.name != 'manifest.json':
@@ -127,9 +138,20 @@ def prepare(embedding_manifest: Path, chunk_root: Path, download_root: Path) -> 
         vectors = read_vectors(embedding_file, identity, embedding_item['chunk_count'])
         episodes.append({'external_id': identity,
             'segments': segments, 'chunks': rows, 'embeddings': vectors})
-    return {'embedding_run': embedding_run, 'chunk_run': chunk_run,
+    result: Prepared = {'embedding_run': embedding_run, 'chunk_run': chunk_run,
         'download_run': download_run, 'catalogue': catalogue, 'episodes': episodes,
         'chunks': chunks, 'embeddings': embeddings}
+    if description_manifest is not None:
+        description_manifest = description_manifest.resolve()
+        if description_manifest.name != 'manifest.json':
+            raise ValueError('Expected description manifest.json')
+        descriptions = verify_descriptions(description_manifest.parent, download_path)
+        result['description_configuration'] = descriptions['configuration']
+        result['descriptions'] = [{'external_id': item['episode_id'], 'title': item['title'],
+            'description': item['description'], 'embedding': read_vectors(
+                contained_file(description_manifest.parent, item['path']), item['episode_id'], 1)[0]['embedding']}
+            for item in descriptions['descriptions']]
+    return result
 
 
 def register(cursor: Cursor, table: str, configuration: object) -> int:
@@ -191,6 +213,52 @@ def load_episode(cursor: Cursor, episode: Episode, identity: int, strategy: int,
         raise ValueError('Database row counts do not match source artifacts')
 
 
+def load_descriptions(cursor: Cursor, prepared: Prepared, verify_only: bool = False) -> None:
+    """Write or verify description vectors inside the caller's complete import transaction.
+
+    Consume only artifact snapshots already checked against downloaded metadata.
+    Resolve external IDs after episode insertion. Conflicting equal-source vectors
+    fail the whole transaction; changed metadata can replace an older snapshot.
+    Standalone transcript-only recovery may omit description artifacts.
+    """
+    records = prepared.get('descriptions', [])
+    if not records:
+        return
+    configuration = prepared.get('description_configuration')
+    if configuration is None:
+        raise ValueError('Missing description model configuration')
+    if verify_only:
+        execute(cursor, 'description_model', (canonical(configuration),))
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError('Previously imported description model is missing')
+        model = int(row[0])
+    else:
+        model = register(cursor, 'embedding_model', configuration)
+    for record in records:
+        execute(cursor, 'identity_lookup', (record['external_id'],))
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError('Description episode is missing')
+        identity = int(row[0])
+        execute(cursor, 'description_sources_readonly' if verify_only else 'description_sources', ([identity],))
+        source = cursor.fetchone()
+        expected = (record['external_id'], record['title'], record['description'])
+        if source is None or tuple(source[1:]) != expected:
+            raise ValueError('Description metadata does not match committed catalogue')
+        execute(cursor, 'description_lookup', (identity, model))
+        previous = cursor.fetchone()
+        if previous is not None and tuple(previous[:2]) == expected[1:]:
+            vector = json.loads(previous[2])
+            if len(vector) != len(record['embedding']) or not all(
+                    math.isclose(a, b, rel_tol=0, abs_tol=1e-7) for a, b in zip(vector, record['embedding'], strict=True)):
+                raise ValueError('Conflicting vector for the same description snapshot')
+            continue
+        if verify_only:
+            raise ValueError('Previously imported description embedding is missing or stale')
+        execute(cursor, 'description_upsert', (identity, model, record['title'], record['description'], canonical(record['embedding'])))
+
+
 def verify_committed(cursor: Cursor, prepared: Prepared) -> None:
     """Read committed provenance, configurations, catalogue membership and per-episode counts.
 
@@ -218,6 +286,7 @@ def verify_committed(cursor: Cursor, prepared: Prepared) -> None:
         if identity is None:
             raise ValueError('Previously imported episode is missing')
         load_episode(cursor, episode, int(identity[0]), strategy, model, verify_only=True)
+    load_descriptions(cursor, prepared, verify_only=True)
 
 
 def verify_database(prepared: Prepared, dsn: str) -> LoadResult:
@@ -282,6 +351,7 @@ def load(prepared: Prepared, dsn: str) -> LoadResult:
                             entry['podcast_title'], entry['podcast_url'], entry['player_url']))
                     for episode in prepared['episodes']:
                         load_episode(cursor, episode, identities[episode['external_id']], strategy, model)
+                    load_descriptions(cursor, prepared)
                     execute(cursor, 'run', (prepared['embedding_run'], prepared['chunk_run'], prepared['download_run'],
                         prepared['embeddings']['show'], strategy, model, len(prepared['catalogue']),
                         len(prepared['episodes']), prepared['embeddings']['chunk_count']))
@@ -294,12 +364,13 @@ def main() -> None:
     """Load a selected manifest using environment-only DB credentials."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--embedding-manifest', type=Path, required=True)
+    parser.add_argument('--description-manifest', help='Description embedding manifest from the same download run')
     parser.add_argument('--chunk-root', type=Path, default=Path('data/chunks/segment-characters-v1-1000-300/runs'))
     parser.add_argument('--download-root', type=Path, default=Path('data'))
     parser.add_argument('--verify-only', action='store_true', help='Read-only verification of an already committed import')
     args = parser.parse_args()
     dsn = os.environ.get('RF_DATABASE_DSN', '')
-    prepared = prepare(args.embedding_manifest, args.chunk_root, args.download_root)
+    prepared = prepare(args.embedding_manifest, args.chunk_root, args.download_root, Path(args.description_manifest) if args.description_manifest else None)
     operation = verify_database if args.verify_only else load
     print(json.dumps(operation(prepared, dsn)))
 

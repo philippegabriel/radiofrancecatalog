@@ -27,8 +27,19 @@ DO $$ BEGIN
     OR (SELECT chunk_count FROM import_run) <> (SELECT count(*) FROM chunk_embedding) THEN
    RAISE EXCEPTION 'Invalid chunk/embedding counts, dimensions or normalization';
  END IF;
+ IF EXISTS (
+    SELECT FROM episodes e WHERE e.description ~ '[^[:space:]]' AND NOT EXISTS (
+      SELECT FROM episode_embedding v JOIN embedding_model m ON m.id=v.model_id
+      WHERE v.episode_id=e.episode_id
+        AND m.configuration->>'document_template' = 'title: {title} | text: {description}'
+        AND v.source_title IS NOT DISTINCT FROM e.title
+        AND v.source_description IS NOT DISTINCT FROM e.description
+        AND vector_dims(v.embedding)=256 AND abs(vector_norm(v.embedding)-1)<0.0001
+    )
+ ) THEN RAISE EXCEPTION 'Missing or stale episode-description embeddings'; END IF;
 END $$;
 SELECT (SELECT count(*) FROM episodes) AS episodes,
  (SELECT count(*) FROM transcript_segment) AS segments,
- (SELECT count(*) FROM chunk_embedding) AS embeddings;
+ (SELECT count(*) FROM chunk_embedding) AS embeddings,
+ (SELECT count(*) FROM episode_embedding) AS description_embeddings;
 ROLLBACK;

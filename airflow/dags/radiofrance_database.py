@@ -5,7 +5,7 @@ from datetime import timedelta
 import os
 from pathlib import Path
 import re
-from typing import TypedDict
+from typing import TypedDict, NotRequired
 
 from airflow.sdk import DAG, Param, task
 from airflow.sdk.definitions.param import ParamsDict
@@ -13,12 +13,14 @@ from airflow.providers.docker.operators.docker import DockerOperator
 from docker.types import Mount
 from psycopg2.extensions import make_dsn
 
+from radiofrance.jobs.description_embedding import DIRECTORY as DESCRIPTION_DIRECTORY
 from radiofrance.libs.storage import CHUNK_DIRECTORY, EMBEDDING_DIRECTORY
 from radiofrance.jobs.database import Prepared, prepare, verify_database as verify_import
 from radiofrance.jobs.chunk import contained_file
 
 
 class DatabaseRun(TypedDict):
+    description_run: NotRequired[str]
     embedding_run: str
 
 
@@ -26,6 +28,7 @@ HOST = os.environ.get('RF_PROJECT_ROOT', '')
 DOWNLOADS = Path('/opt/radiofrance/data/runs')
 CHUNKS = Path('/opt/radiofrance/data') / CHUNK_DIRECTORY / 'runs'
 EMBEDDINGS = Path('/opt/radiofrance/data') / EMBEDDING_DIRECTORY / 'runs'
+DESCRIPTIONS = Path('/opt/radiofrance/data') / DESCRIPTION_DIRECTORY
 NETWORK = os.environ.get('RF_DOCKER_NETWORK', 'radiofrance_default')
 DATABASE_ENV = {'PGHOST': os.environ.get('RF_DATABASE_HOST', 'postgres'),
     'PGPORT': os.environ.get('RF_DATABASE_PORT', '5432'), 'PGDATABASE': 'radiofrance', 'PGUSER': 'radiofrance'}
@@ -34,7 +37,9 @@ DATABASE_ENV = {'PGHOST': os.environ.get('RF_DATABASE_HOST', 'postgres'),
 def selected_run(state: DatabaseRun) -> Prepared:
     """Revalidate the selected file chain and reject a manifest changed since preflight."""
     manifest = contained_file(EMBEDDINGS, f"{state['embedding_run']}/manifest.json")
-    prepared = prepare(manifest, CHUNKS, DOWNLOADS.parent if DOWNLOADS.name == "runs" else DOWNLOADS)
+    name = state.get('description_run')
+    description = contained_file(DESCRIPTIONS, f'{name}/manifest.json') if name else None
+    prepared = prepare(manifest, CHUNKS, DOWNLOADS.parent if DOWNLOADS.name == "runs" else DOWNLOADS, description)
     return prepared
 
 
@@ -44,7 +49,7 @@ with DAG(
     doc_md="""
 ## Purpose and flow
 Standalone database-load recovery stage. Validate a selected embedding manifest
-and its download/chunk lineage, load the episode set transactionally, then independently
+and its download/chunk lineage plus the matching description manifest, load the episode set transactionally, then independently
 verify committed records. For a complete run, use the show selection form in
 radiofrance_pipeline instead.
 
@@ -57,12 +62,15 @@ files are mounted read-only. Only application credentials reach the loader.
 ## Results and recovery
 The selected manifests explicitly identify shared transcripts, chunk CSVs and NPY
 matrices; filesystem directory scans never select work. Database changes and import
-completion commit together. Repeating an import verifies the existing records.
+completion and both kinds of vectors commit together. Description artifacts must
+match the same download and source text. Standalone transcript-only recovery may
+leave description_run blank; normal pipeline runs always supply it. Repeating an import verifies the existing records.
 Failures roll back uncommitted writes; if verification fails after commit, retry
 verification alone or reload the same timestamp. No schema changes are required.
 """,
     schedule=None, catchup=False, max_active_runs=1, default_args={'retries': 0},
-    params=ParamsDict({'embedding_run': Param('', type='string',
+    params=ParamsDict({'description_run': Param('', type='string', description='Matching description embedding folder; supplied by the pipeline. Blank permits transcript-only recovery.'),
+        'embedding_run': Param('', type='string',
         description='Standalone recovery: UTC timestamp of a completed embedding stage; use radiofrance_pipeline for a full run')}),
     tags=['radiofrance', 'database'],
 ) as dag:
@@ -70,7 +78,7 @@ verification alone or reload the same timestamp. No schema changes are required.
     def prepare_load(params: Mapping[str, str]) -> DatabaseRun:
         """Validate the chosen artifact chain and host/DB settings without database writes.
 
-        Input is the embedding_run parameter. Read source manifests and artifacts;
+        Inputs are embedding_run and optional standalone description_run references. Read source manifests and artifacts;
         return only a directory basename and its run name through XCom.
         No credentials or artifact contents are returned, and no files are written.
         """
@@ -82,8 +90,14 @@ verification alone or reload the same timestamp. No schema changes are required.
         if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,150}', name):
             raise ValueError('embedding_run must be a single run directory basename')
         manifest = contained_file(EMBEDDINGS, f'{name}/manifest.json')
-        prepared = prepare(manifest, CHUNKS, DOWNLOADS.parent if DOWNLOADS.name == "runs" else DOWNLOADS)
-        return {'embedding_run': name}
+        state: DatabaseRun = {'embedding_run': name}
+        description = params.get('description_run', '')
+        if description:
+            if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,150}', description):
+                raise ValueError('description_run must be a single run directory basename')
+            state['description_run'] = description
+        selected_run(state)
+        return state
 
     @task
     def verify_database(state: DatabaseRun) -> None:
@@ -111,7 +125,8 @@ verification alone or reload the same timestamp. No schema changes are required.
         task_id='load_database', image='radiofrance-database:dev',
         docker_url='unix://var/run/docker.sock', api_version='auto',
         command=['--embedding-manifest', f"/data/{EMBEDDING_DIRECTORY}/runs/{{{{ ti.xcom_pull(task_ids='prepare_load')['embedding_run'] }}}}/manifest.json",
-            '--chunk-root', f'/data/{CHUNK_DIRECTORY}/runs', '--download-root', '/data'],
+            '--chunk-root', f'/data/{CHUNK_DIRECTORY}/runs', '--download-root', '/data',
+            '--description-manifest', f"{{{{ '/data/{DESCRIPTION_DIRECTORY}/' + ti.xcom_pull(task_ids='prepare_load')['description_run'] + '/manifest.json' if ti.xcom_pull(task_ids='prepare_load').get('description_run') else '' }}}}"],
         mounts=[Mount('/data', f'{HOST or "/not-configured"}/data', type='bind', read_only=True)],
         environment=DATABASE_ENV,
         private_environment={'PGPASSWORD': os.environ.get('RF_DATABASE_PASSWORD', '')},

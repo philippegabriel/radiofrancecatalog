@@ -22,7 +22,7 @@ from radiofrance.libs.storage import CHUNK_DIRECTORY, EMBEDDING_DIRECTORY
 
 FIXTURE = ROOT / 'ci/fixtures/le-cours-de-l-histoire.json'
 SHOW = 'le-cours-de-l-histoire'
-DAGS = ('radiofrance_download', 'radiofrance_chunk', 'radiofrance_embedding',
+DAGS = ('radiofrance_download', 'radiofrance_chunk', 'radiofrance_embedding', 'radiofrance_description_embedding',
         'radiofrance_database', 'process_episodes', 'radiofrance_pipeline')
 
 

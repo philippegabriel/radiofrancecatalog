@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / 'dags'))
 import radiofrance_pipeline as parent
 from radiofrance.libs.progress import EmbeddingReporter
 from radiofrance.libs.run_metrics import show_metrics, describe_metrics, run_totals
+from radiofrance.jobs.description_embedding import DIRECTORY as DESCRIPTION_DIRECTORY
 from radiofrance.libs.storage import CHUNK_DIRECTORY, EMBEDDING_DIRECTORY
 
 
@@ -64,6 +65,13 @@ class RunMetricsTests(unittest.TestCase):
             self.assertEqual(run_totals({'one': metrics, 'two': metrics})['chunks'], 400)
             self.assertEqual(run_totals({'one': metrics})['generated'], 10)
             self.assertIsNone(show_metrics(root, run, 'other-show')['chunks'])
+            with redirect_stdout(StringIO()):
+                descriptions = EmbeddingReporter(root / DESCRIPTION_DIRECTORY / f'{folder}--test-show', 3, 0)
+                descriptions.encoded(3, 1.5)
+                descriptions.publish('completed')
+            updated = show_metrics(root, run, 'test-show')
+            self.assertIn('descriptions completed: 3/3', describe_metrics('test-show', updated))
+            self.assertEqual(run_totals({'one': updated})['description_embeddings'], 3)
 
     def test_parent_monitor_reschedules_and_stops_after_failure(self) -> None:
         """Keep observation separate from catalogue dependencies and report terminal failures."""

@@ -76,9 +76,9 @@ class PipelineTests(unittest.TestCase):
 
     def test_order_waiting_and_failure_boundaries(self) -> None:
         """Serialize a whole show, defer stage waits, and never reset existing child runs."""
-        self.assertEqual(pipeline.dag.task_ids, ['prepare_pipeline', 'download', 'chunk', 'embedding', 'database'])
+        self.assertEqual(pipeline.dag.task_ids, ['prepare_pipeline', 'download', 'chunk', 'embedding', 'description_embedding', 'database'])
         previous = 'prepare_pipeline'
-        for operator in (pipeline.download, pipeline.chunk, pipeline.embedding, pipeline.database):
+        for operator in (pipeline.download, pipeline.chunk, pipeline.embedding, pipeline.description_embedding, pipeline.database):
             self.assertEqual(operator.upstream_task_ids, {previous})
             self.assertTrue(operator.wait_for_completion)
             self.assertTrue(operator.deferrable)
@@ -99,7 +99,7 @@ class PipelineTests(unittest.TestCase):
         self.assertNotEqual(state['chunk']['folder'], other['chunk']['folder'])
         stages: list[tuple[pipeline.TriggerDagRunOperator, pipeline.Stage]] = [
             (pipeline.download, 'download'), (pipeline.chunk, 'chunk'),
-            (pipeline.embedding, 'embedding'), (pipeline.database, 'database')]
+            (pipeline.embedding, 'embedding'), (pipeline.description_embedding, 'description_embedding'), (pipeline.database, 'database')]
         for operator, stage in stages:
             rendered = copy.copy(operator)
             rendered.render_template_fields({'ti': XcomReader(state), 'params': params})
@@ -108,4 +108,7 @@ class PipelineTests(unittest.TestCase):
             if operator.task_id != 'database':
                 self.assertEqual(rendered.conf['show'], 'new-show')
                 self.assertEqual(rendered.conf['output_folder'], state[stage]['folder'])
+        self.assertEqual(pipeline.description_embedding.upstream_task_ids, {'embedding'})
+        self.assertEqual(pipeline.database.upstream_task_ids, {'description_embedding'})
+        self.assertEqual(pipeline.description_embedding.trigger_dag_id, 'radiofrance_description_embedding')
         self.assertEqual(parent.catalogue.command, ['--output-dir', '/data/catalogue', '--replace'])

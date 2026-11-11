@@ -14,7 +14,7 @@ from airflow.sdk.definitions.param import ParamsDict
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 
 
-type Stage = Literal['download', 'chunk', 'embedding', 'database']
+type Stage = Literal['download', 'chunk', 'embedding', 'description_embedding', 'database']
 
 
 class StageRun(TypedDict):
@@ -23,6 +23,7 @@ class StageRun(TypedDict):
 
 
 class PipelineRuns(TypedDict):
+    description_embedding: StageRun
     download: StageRun
     chunk: StageRun
     embedding: StageRun
@@ -36,6 +37,7 @@ class StageConf(TypedDict, total=False):
     download_run: str
     chunk_run: str
     embedding_run: str
+    description_run: str
     show: str
     show_url: str
     output_folder: str
@@ -76,7 +78,9 @@ with DAG(
     doc_md="""
 ## Purpose and flow
 Internal single-show coordinator used by radiofrance_pipeline. It runs download,
-chunk, embedding and database child DAGs, waiting for each verification. Exactly
+chunk, embedding and database child DAGs, waiting for each verification. A separate description embedding DAG reads the
+same download metadata before database loading. The database stage imports both
+vector kinds together, transactionally; the backfill commands are independent. Exactly
 one coordinator run may be active, so selected shows process sequentially even
 though the parent queues all requests. A failed show does not reset committed
 work; other queued shows can still run, and the parent reports any failure.
@@ -85,7 +89,9 @@ work; other queued shows can still run, and the parent reports any failure.
 The parent supplies show and show_url from the show registry, plus optional
 from_date/to_date inclusive Paris broadcast dates. Validate the range before
 triggering any stages and pass it only to download; downstream jobs use its manifest. This DAG and
-all four stages must be enabled. A bounded read-only registry query populates the
+all five stages must be enabled. Both embedding stages use an offline, read-only
+model cache without database credentials. They run sequentially to keep memory
+usage bounded. The downloaded selection controls show/date bounds for both. A bounded read-only registry query populates the
 show suggestions during parsing. Suggestions do not restrict newly registered
 shows passed by the parent before the next DAG refresh.
 For standalone recovery select a registered show; show_url can be left blank
@@ -97,7 +103,8 @@ triggerers must be running. Automatic retries and child resets are disabled.
 Download records go under data/runs/<parent UTC timestamp>/download/<show>.
 Chunk and embedding completion folders use <timestamp>--<show>. Corpus files
 accumulate by episode and configuration. This DAG does not export HTML; the parent
-does so once after all selected shows succeed. See docs/storage.md.
+does so once after all selected shows succeed. Description NPY files, their manifest and progress sidecar live under
+data/embeddings/episode-descriptions/<revision>/runs/<timestamp>--<show>. See docs/storage.md.
 """,
     schedule=None, catchup=False, max_active_runs=1,
     dagrun_timeout=timedelta(hours=6), default_args={'retries': 0},
@@ -125,7 +132,8 @@ does so once after all selected shows succeed. See docs/storage.md.
             url = resolve_programmes({'shows': [show], 'all_enabled': False, 'new_show_url': []}, registry_dsn())[0]['url']
         if validate_show_url(url)['slug'] != show:
             raise ValueError('Programme URL does not match show')
-        return {'show_url': url, 'download': run_reference(run_id, 'download', show), 'chunk': run_reference(run_id, 'chunk', show),
+        return {'description_embedding': run_reference(run_id, 'description_embedding', show),
+            'show_url': url, 'download': run_reference(run_id, 'download', show), 'chunk': run_reference(run_id, 'chunk', show),
             'embedding': run_reference(run_id, 'embedding', show), 'database': run_reference(run_id, 'database', show)}
 
     references = prepare_pipeline()  # pyright: ignore[reportCallIssue]
@@ -136,5 +144,9 @@ does so once after all selected shows succeed. See docs/storage.md.
         'output_folder': "{{ ti.xcom_pull(task_ids='prepare_pipeline')['chunk']['folder'] }}", 'download_run': "{{ ti.xcom_pull(task_ids='prepare_pipeline')['download']['folder'] }}"})
     embedding = stage_operator('embedding', {'show': '{{ params.show }}',
         'output_folder': "{{ ti.xcom_pull(task_ids='prepare_pipeline')['embedding']['folder'] }}", 'chunk_run': "{{ ti.xcom_pull(task_ids='prepare_pipeline')['chunk']['folder'] }}"})
-    database = stage_operator('database', {'embedding_run': "{{ ti.xcom_pull(task_ids='prepare_pipeline')['embedding']['folder'] }}"})
-    _ = references >> download >> chunk >> embedding >> database
+    description_embedding = stage_operator('description_embedding', {'show': '{{ params.show }}',
+        'download_run': "{{ ti.xcom_pull(task_ids='prepare_pipeline')['download']['folder'] }}",
+        'output_folder': "{{ ti.xcom_pull(task_ids='prepare_pipeline')['description_embedding']['folder'] }}"})
+    database = stage_operator('database', {'description_run': "{{ ti.xcom_pull(task_ids='prepare_pipeline')['description_embedding']['folder'] }}",
+        'embedding_run': "{{ ti.xcom_pull(task_ids='prepare_pipeline')['embedding']['folder'] }}"})
+    _ = references >> download >> chunk >> embedding >> description_embedding >> database

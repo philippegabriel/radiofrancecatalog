@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
+from radiofrance.jobs import description_embedding
 
 import psycopg2
 
@@ -73,3 +75,58 @@ class DescriptionDatabaseTests(unittest.TestCase):
                 cursor.execute("UPDATE episode_embedding SET embedding=('[0,1,' || repeat('0,',253) || '0]')::vector")
         with self.assertRaisesRegex(ValueError, 'Conflicting vector'):
             job.load(directory, self.dsn)
+
+
+@unittest.skipUnless('RF_TEST_DATABASE_DSN' in os.environ, 'requires a disposable database')
+class UnifiedEmbeddingLoadTests(unittest.TestCase):
+    def setUp(self) -> None:
+        """Prepare both artifact sets without writing anything to the application tables."""
+        fixture = fixtures.DatabaseJobTests()
+        fixture.setUp()
+        self.dsn = fixture.dsn
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        fixture.fixture(self.root)
+        source = self.root / 'downloads/run/manifest.json'
+        output = self.root / 'description-run'
+        description_embedding.run_embedding(source, output, self.root / 'unused', encode=vector)
+        self.prepared = database.prepare(self.root / 'embeddings-run/manifest.json',
+            self.root / 'chunks', self.root / 'downloads', output / 'manifest.json')
+
+    def test_description_failure_rolls_back_the_entire_import(self) -> None:
+        """A description write failure must leave no catalogue, transcript, vector or completion rows."""
+        execute = database.execute
+
+        def failing(cursor: database.Cursor, name: str, parameters: tuple[object, ...] = ()) -> None:
+            """Simulate a database failure late in the single transaction."""
+            if name == 'description_upsert':
+                raise ValueError('Simulated description write failure')
+            execute(cursor, name, parameters)
+
+        with patch.object(database, 'execute', side_effect=failing), self.assertRaisesRegex(ValueError, 'Simulated'):
+            database.load(self.prepared, self.dsn)
+        with psycopg2.connect(self.dsn) as connection, connection.cursor() as cursor:
+            cursor.execute('SELECT (SELECT count(*) FROM episodes), (SELECT count(*) FROM transcript), '
+                '(SELECT count(*) FROM chunk_embedding), (SELECT count(*) FROM episode_embedding), '
+                '(SELECT count(*) FROM import_run)')
+            self.assertEqual(cursor.fetchone(), (0, 0, 0, 0, 0))
+        database.load(self.prepared, self.dsn)
+        database.verify_database(self.prepared, self.dsn)
+        self.assertTrue(database.load(self.prepared, self.dsn)['already_imported'])
+        with psycopg2.connect(self.dsn) as connection, connection.cursor() as cursor:
+            cursor.execute('SELECT count(*) FROM episode_embedding')
+            self.assertEqual(cursor.fetchone(), (1,))
+            cursor.execute('DELETE FROM episode_embedding')
+        with self.assertRaisesRegex(ValueError, 'missing or stale'):
+            database.verify_database(self.prepared, self.dsn)
+
+    def test_preflight_rejects_a_description_snapshot_from_another_download(self) -> None:
+        """Both vector kinds must describe the same downloaded metadata, before opening a DB."""
+        path = self.root / 'description-run/manifest.json'
+        manifest = json.loads(path.read_text())
+        manifest['descriptions'][0]['description'] = 'Unrelated source'
+        path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(ValueError, 'snapshot mismatch'):
+            database.prepare(self.root / 'embeddings-run/manifest.json', self.root / 'chunks',
+                self.root / 'downloads', path)

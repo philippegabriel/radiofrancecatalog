@@ -10,6 +10,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parent.parent / 'dags'))
 import radiofrance_database as dag_module
 import database.test.test_database_job as fixtures
+from radiofrance.jobs.description_embedding import run_embedding
+from tests.test_description_embedding import vectors
 
 
 class DatabaseDagTests(unittest.TestCase):
@@ -44,6 +46,11 @@ class DatabaseDagTests(unittest.TestCase):
                     patch.object(dag_module, 'EMBEDDINGS', root), \
                     patch.object(dag_module, 'CHUNKS', root / 'chunks'), \
                     patch.object(dag_module, 'DOWNLOADS', root / 'downloads'):
+                output = root / 'description-run'
+                run_embedding(root / 'downloads/run/manifest.json', output, root / 'unused', encode=vectors)
+                with patch.object(dag_module, 'DESCRIPTIONS', root):
+                    state = dag_module.prepare_load.function({'embedding_run': 'embeddings-run', 'description_run': 'description-run'})
+                self.assertEqual(state.get('description_run'), 'description-run')
                 state = dag_module.prepare_load.function({'embedding_run': 'embeddings-run'})
                 with patch.object(dag_module, 'verify_import') as verify:
                     verify.return_value = {'embedding_run': state['embedding_run'],

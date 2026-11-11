@@ -71,7 +71,7 @@ are; new pipeline writes use the configuration directories above. Existing
 manifests remain readable by the job functions, but the current Airflow forms and
 mounts select the new layout. Old stage directories are no longer pipeline outputs.
 
-Enable the parent, its single-show coordinator and four stage DAGs. Use the
+Enable the parent, its single-show coordinator and five stage DAGs. Use the
 parent selection form described below. For recovery only, trigger `radiofrance_chunk` with
 `download_run: <timestamp>/download/<show>`, `radiofrance_embedding` with
 `chunk_run: <timestamp>--<show>`, or `radiofrance_database` with `embedding_run: <timestamp>--<show>`.
@@ -113,9 +113,9 @@ application tables. Existing databases with text `rf.show` need the transactiona
 first-start scripts. Then apply the [catalogue naming migration](../database/CATALOGUE_NAMES_MIGRATION.md). The guides include image rebuild, migration, verification
 and rollback commands. It preserves catalogue data and Airflow history.
 
-Rebuild the images using the upgrade commands above. Enable these six DAGs:
+Rebuild the images using the upgrade commands above. Enable these seven DAGs:
 `radiofrance_pipeline`, `process_episodes`, `radiofrance_download`,
-`radiofrance_chunk`, `radiofrance_embedding`, and `radiofrance_database`.
+`radiofrance_chunk`, `radiofrance_embedding`, `radiofrance_description_embedding`, and `radiofrance_database`.
 Trigger the parent and fill its selection form. The internal show coordinator
 has `max_active_runs=1`, which serializes complete show chains, including across
 manual coordinator runs. Parent mapped tasks can all be deferred, but this does
@@ -161,6 +161,7 @@ radiofrance_pipeline
       radiofrance_download
       radiofrance_chunk
       radiofrance_embedding
+      radiofrance_description_embedding
       radiofrance_database
   catalogue                    task: refresh HTML after all shows succeed
   monitor_run                  task: unified live log, parallel with processing
@@ -242,3 +243,52 @@ sudo docker compose up -d --wait --wait-timeout 300 airflow
 ```
 
 The download CLI supports the same optional `--from-date` and `--to-date` flags.
+
+## Description embeddings in the normal pipeline
+
+Each show follows the same stage-DAG pattern:
+
+```text
+download → chunk → transcript embeddings → description embeddings → database
+```
+
+`radiofrance_description_embedding` reads the selected download metadata directly,
+with no PostgreSQL access or credentials. It encodes each nonblank description as
+`title: <title> | text: <description>` using the same normalized 256D FP32 model
+as description search. Blank descriptions are skipped; empty runs publish a valid
+empty manifest without loading the model. Both encoding stages run sequentially
+to keep CPU and memory use bounded.
+
+The database stage validates both embedding manifests against the same download,
+including exact source title/description snapshots. It inserts episode metadata,
+transcripts, chunks, both kinds of vectors and import completion in one transaction.
+A failure rolls back that whole import; a new pipeline run reselects uncommitted
+episodes and reuses available transcripts/transcript vectors. Description vectors
+are run-scoped artifacts and are regenerated on a fresh run. An identical import
+verifies stored description vectors rather than duplicating them.
+
+Description artifacts live under
+`data/embeddings/episode-descriptions/<revision>/runs/<timestamp>--<show>/`.
+Each directory contains per-episode NPY files and a completion manifest recording
+external episode IDs, model configuration, source snapshots and the download run.
+A sibling progress sidecar feeds `radiofrance_pipeline.monitor_run`, which reports
+transcript and description counts separately.
+
+Existing database-only backfill commands remain independent. The normal pipeline
+processes only episodes in its download selection; it does not scan PostgreSQL for
+unrelated missing descriptions. Existing gaps need the explicit backfill workflow.
+For standalone loader recovery, description_run may be left blank for a
+transcript-only import. The parent always supplies both manifests.
+
+No database migration or model download is required. After active runs finish:
+
+```bash
+sudo docker build -f embedding/Dockerfile -t radiofrance-embedding:dev .
+sudo docker compose build airflow database-loader
+sudo docker compose up -d --wait --wait-timeout 300 airflow
+sudo docker compose exec airflow airflow dags unpause radiofrance_description_embedding
+```
+
+Trigger the parent as usual. It now waits for all five stage DAGs; enable the new
+description DAG before starting. Pipeline integration validates description
+coverage, dimensions, normalization and metadata snapshots as well as transcripts.

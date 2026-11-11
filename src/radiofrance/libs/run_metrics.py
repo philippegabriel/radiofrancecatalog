@@ -2,8 +2,9 @@
 
 import json
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import TypedDict, cast, NotRequired
 
+from radiofrance.jobs.description_embedding import DIRECTORY as DESCRIPTION_DIRECTORY
 from radiofrance.jobs.chunk import ChunkManifest
 from radiofrance.jobs.download import DownloadManifest
 from radiofrance.libs.progress import EmbeddingProgress
@@ -12,6 +13,7 @@ from radiofrance.libs.storage import CHUNK_DIRECTORY, EMBEDDING_DIRECTORY
 
 
 class ShowMetrics(TypedDict):
+    description_embeddings: NotRequired[EmbeddingProgress | None]
     episodes: int | None
     transcripts: int | None
     chunks: int | None
@@ -34,6 +36,9 @@ def show_metrics(root: Path, run_id: str, show: str) -> ShowMetrics:
     progress = root / EMBEDDING_DIRECTORY / 'runs' / f'{folder}--{show}.progress.json'
     if progress.is_file():
         result['embeddings'] = cast(EmbeddingProgress, json.loads(progress.read_text()))
+    descriptions = root / DESCRIPTION_DIRECTORY / f'{folder}--{show}.progress.json'
+    result['description_embeddings'] = (cast(EmbeddingProgress, json.loads(descriptions.read_text()))
+        if descriptions.is_file() else None)
     return result
 
 
@@ -54,10 +59,18 @@ def describe_metrics(show: str, metrics: ShowMetrics) -> str:
             text += f'; estimated encoding time remaining {remaining:.0f}s'
         if progress['phase'] == 'completed':
             text += f"; encoding {progress['encoding_seconds']:.1f}s, job elapsed {progress['elapsed_seconds']:.1f}s"
+    descriptions = metrics.get('description_embeddings')
+    if descriptions is not None:
+        text += f"; descriptions {descriptions['phase']}: {descriptions['generated']}/{descriptions['total']} generated"
+        if descriptions['rate'] is not None:
+            text += f"; descriptions {descriptions['rate']:.2f}/s (encoding only)"
+        if descriptions['remaining_seconds'] is not None:
+            text += f"; description encoding remaining {descriptions['remaining_seconds']:.0f}s"
     return text
 
 
 class RunTotals(TypedDict):
+    description_embeddings: int | None
     episodes: int | None
     transcripts: int | None
     chunks: int | None
@@ -74,7 +87,10 @@ def run_totals(shows: dict[str, ShowMetrics]) -> RunTotals:
     progress = [item['embeddings'] for item in shows.values()]
     generated = sum(item['generated'] for item in progress if item is not None) if all(item is not None for item in progress) else None
     cached = sum(item['cached'] for item in progress if item is not None) if all(item is not None for item in progress) else None
-    return {'episodes': sum(value for value in episodes if value is not None) if None not in episodes else None,
+    descriptions = [item.get('description_embeddings') for item in shows.values()]
+    description_count = (sum(item['generated'] for item in descriptions if item is not None)
+        if all(item is not None for item in descriptions) else None)
+    return {'description_embeddings': description_count, 'episodes': sum(value for value in episodes if value is not None) if None not in episodes else None,
         'transcripts': sum(value for value in transcripts if value is not None) if None not in transcripts else None,
         'chunks': sum(value for value in chunks if value is not None) if None not in chunks else None,
         'embeddings': generated + cached if generated is not None and cached is not None else None,

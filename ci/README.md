@@ -142,7 +142,7 @@ fixed episode IDs in the show page. The generated site is included in the upload
 diagnostics under `catalogue/`.
 
 Integration explicitly selects the fixed fixture show in the parent trigger form
-and enables the single-show coordinator as well as all four stages. Fresh database
+and enables the single-show coordinator as well as all five stages. Fresh database
 initialization includes the `shows` registry. Local database tests cover URL
 validation, registration idempotence, enabled selection, transaction rollback and
 acquisition/loading for a show absent from the former hard-coded list.

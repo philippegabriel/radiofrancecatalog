@@ -55,7 +55,7 @@ Suggestions are refreshed on the next parse and runtime selection is revalidated
 ## Flow and configuration
 select_shows queues one process_episodes run per selected show.
 That coordinator has max_active_runs=1, so only one show's processing chain can
-be active at once. Enable it, the four stage DAGs and this parent. Apply
+be active at once. Enable it, the five stage DAGs and this parent. Apply
  the upgrades in database/CATALOGUE_NAMES_MIGRATION.md to existing databases and rebuild
 the affected images. Fresh databases create the registry before episodes.
 Compose provides application DB credentials and Docker/model settings.
@@ -65,7 +65,10 @@ Each show has data/runs/<UTC timestamp>/download/<show> metadata and explicit sh
 corpus references. Chunk/embedding completion directories end in --<show>.
 Successful shows commit independently; a failed show leaves those commits intact
 and does not prevent other already queued shows from running. The parent fails
-if any show fails. catalogue runs once only if all selected shows succeed, using
+if any show fails. Each show generates description vectors from the same download artifacts before
+database loading. Both vector kinds are then imported transactionally. Date bounds
+apply through download selection. monitor_run reports both embedding stages.
+catalogue runs once only if all selected shows succeed, using
 all committed episodes. A new parent run reuses files and database cutoffs.
 Registered URLs persist even if acquisition later fails. URL syntax is validated
 before registration; the live API determines whether a programme actually exists.
