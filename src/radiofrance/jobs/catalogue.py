@@ -31,12 +31,13 @@ class CatalogueResult(TypedDict):
 
 
 def page(title: str, body: str) -> str:
-    """Wrap escaped content with the original catalogue stylesheet and local logo."""
+    """Wrap escaped content in a static, responsive catalogue with local styling and logo."""
     return ('<!doctype html>\n<html lang="fr"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f'<title>{escape(title)}</title><link rel="stylesheet" href="index.css"></head><body>'
-        '<img src="Logo_Radio_France.svg.webp" alt="Radio France">'
-        f'<h1>{escape(title)}</h1>{body}</body></html>\n')
+        '<header><a href="index.html" aria-label="Accueil du catalogue"><img src="radiofrance-logo.png" width="144" height="36" alt="Radio France"></a>'
+        '<div>'
+        f'<h1>{escape(title)}</h1></div></header><main>{body}</main></body></html>\n')
 
 
 def episode_row(episode: Episode, number: int) -> str:
@@ -78,25 +79,25 @@ def export_catalogue(output_dir: Path, dsn: str = '', replace: bool = False) -> 
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix='.catalogue-', dir=output_dir.parent))
     try:
-        for asset in ('index.css', 'Logo_Radio_France.svg.webp'):
+        for asset in ('index.css', 'radiofrance-logo.png'):
             (temporary / asset).write_bytes(files('radiofrance').joinpath('assets', asset).read_bytes())
         links: list[str] = []
         for show, rows in grouped.items():
             # podcast_title may contain an episode title, so it cannot name the show.
             title = show
-            body = ('<p><a href="index.html">Tous les programmes</a></p><table border="1" class="dataframe">'
+            body = ('<p><a href="index.html">← Tous les programmes</a></p><div class="table-wrap episode-catalogue"><table class="dataframe">'
                 f'<caption>{len(rows)} épisodes, du plus récent au plus ancien</caption>'
-                '<thead><tr><th></th><th>date</th><th>title</th><th>description</th></tr></thead><tbody>'
-                + ''.join(episode_row(row, number) for number, row in enumerate(rows)) + '</tbody></table>')
+                '<thead><tr><th scope="col" aria-label="Numéro">#</th><th scope="col">Date</th><th scope="col">Titre</th><th scope="col">Description</th></tr></thead><tbody>'
+                + ''.join(episode_row(row, number) for number, row in enumerate(rows)) + '</tbody></table></div>')
             (temporary / f'{show}.html').write_text(page(title, body), encoding='utf-8')
             show_link = escape(title)
             if urlsplit(rows[0]['show_url']).scheme.lower() in ('http', 'https'):
                 show_link = f'<a href="{escape(rows[0]["show_url"], quote=True)}">{show_link}</a>'
             links.append(f'<tr><td>{show_link}</td><td><a href="{show}.html">Episodes</a> ({len(rows)})</td></tr>')
         (temporary / 'index.html').write_text(page('Catalogue Radio France',
-            f'<p>{len(episodes)} épisodes</p><table border="1" class="dataframe">'
-            '<thead><tr><th>Podcast URLs</th><th>Metadata index</th></tr></thead>'
-            f'<tbody>{"".join(links)}</tbody></table>' ), encoding='utf-8')
+            f'<p class="summary">{len(episodes):,} épisodes · {len(grouped)} programmes</p><div class="table-wrap programme-catalogue"><table class="dataframe">'
+            '<thead><tr><th scope="col">Programme sur Radio France</th><th scope="col">Catalogue des épisodes</th></tr></thead>'
+            f'<tbody>{"".join(links)}</tbody></table></div>'), encoding='utf-8')
         (temporary / 'manifest.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
         temporary.chmod(0o755)
         if replace:

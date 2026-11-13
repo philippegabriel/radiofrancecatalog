@@ -56,8 +56,8 @@ class CatalogueTests(unittest.TestCase):
             self.assertNotIn('<th>Web URL</th>', html)
             self.assertIn('class="dataframe"', html)
             self.assertIn('https://www.radiofrance.fr/franceculture/podcasts/show-one', index)
-            self.assertTrue((output / 'Logo_Radio_France.svg.webp').is_file())
-            self.assertIn('#6495ED', (output / 'index.css').read_text())
+            self.assertTrue((output / 'radiofrance-logo.png').is_file())
+            self.assertTrue((output / 'index.css').is_file())
             with self.assertRaises(FileExistsError):
                 export_catalogue(output, self.dsn)
             self.assertEqual(len(list(output.parent.iterdir())), 1)
