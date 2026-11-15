@@ -33,13 +33,13 @@ missing transcripts. Per-show execution remains serialized by the pipeline DAG.
 Outputs:
 
 ```text
-data/runs/<UTC timestamp>/download/
-  episodes.json                # new episode metadata only; [] for no new work
+data/episodes/EPISODE_ID.json   # shared episode metadata, including description
+data/runs/<UTC timestamp>/<show>/download/
   manifest.json                # version 2; DB cutoff/count and shared artifact paths
 data/transcripts/EPISODE_ID.json # accumulated raw transcripts
 ```
 
-`episodes.json` is a JSON array with the existing catalogue fields. `published_ts`
+Each shared episode JSON is a single-element array with the existing catalogue fields. `published_ts`
 is an integer; the other fields are strings. The metadata IDs must match the
 manifest's transcript IDs exactly. Chunk CSVs and embedding NPY files belong to
 later stages and keep their existing formats.
@@ -89,7 +89,7 @@ venv/airflow/bin/python -m radiofrance.jobs.download \
   --show mecaniques-du-journalisme \
   --api-key-file .OpenAPIKey \
   --data-root data \
-  --output-dir data/runs/2026-11-03_14-30-00-000000Z/download
+  --output-dir data/runs/2026-11-03_14-30-00-000000Z/affaires-sensibles/download
 ```
 
 The default delay between transcript requests is one second. Use

@@ -49,14 +49,14 @@ class RunMetricsTests(unittest.TestCase):
             empty = show_metrics(root, run, 'test-show')
             self.assertIsNone(empty['episodes'])
             self.assertIsNone(run_totals({'show': empty})['episodes'])
-            download = root / 'runs' / folder / 'download/test-show/manifest.json'
+            download = root / 'runs' / folder / 'test-show/download/manifest.json'
             download.parent.mkdir(parents=True)
             download.write_text(json.dumps({'new_episode_count': 3, 'transcripts': [{}, {}]}))
-            chunk = root / CHUNK_DIRECTORY / 'runs' / f'{folder}--test-show/manifest.json'
+            chunk = root / 'runs' / folder / 'test-show/chunk/manifest.json'
             chunk.parent.mkdir(parents=True)
             chunk.write_text(json.dumps({'chunk_count': 200}))
             with redirect_stdout(StringIO()):
-                reporter = EmbeddingReporter(root / EMBEDDING_DIRECTORY / 'runs' / f'{folder}--test-show', 200, 0)
+                reporter = EmbeddingReporter(root / 'runs' / folder / 'test-show/embedding', 200, 0, shared=True)
                 reporter.encoded(10, 5)
             metrics = show_metrics(root, run, 'test-show')
             self.assertEqual((metrics['episodes'], metrics['transcripts'], metrics['chunks']), (3, 2, 200))
@@ -66,12 +66,30 @@ class RunMetricsTests(unittest.TestCase):
             self.assertEqual(run_totals({'one': metrics})['generated'], 10)
             self.assertIsNone(show_metrics(root, run, 'other-show')['chunks'])
             with redirect_stdout(StringIO()):
-                descriptions = EmbeddingReporter(root / DESCRIPTION_DIRECTORY / f'{folder}--test-show', 3, 0)
+                descriptions = EmbeddingReporter(root / 'runs' / folder / 'test-show/description-embedding', 3, 0, shared=True)
                 descriptions.encoded(3, 1.5)
                 descriptions.publish('completed')
             updated = show_metrics(root, run, 'test-show')
             self.assertIn('descriptions completed: 3/3', describe_metrics('test-show', updated))
             self.assertEqual(run_totals({'one': updated})['description_embeddings'], 3)
+
+    def test_monitor_has_no_runtime_deadline(self) -> None:
+        """Continue rescheduling even a year after monitoring first started."""
+        import copy
+        import math
+        from datetime import datetime, timedelta, timezone
+        from airflow.exceptions import AirflowRescheduleException
+        operator = copy.copy(parent.dag.get_task('monitor_run'))
+        self.assertIsInstance(operator, parent.UnboundedMonitorSensor)
+        assert isinstance(operator, parent.UnboundedMonitorSensor)
+        self.assertTrue(math.isfinite(operator.timeout))
+        ti = MagicMock()
+        ti.get_first_reschedule_date.return_value = datetime.now(timezone.utc) - timedelta(days=365)
+        with patch.object(operator, 'poke', return_value=False):
+            with self.assertRaises(AirflowRescheduleException):
+                operator.execute({'ti': ti})
+        self.assertEqual(operator.timeout, math.inf)
+        self.assertTrue(math.isfinite(parent.monitoring.timeout))
 
     def test_parent_monitor_reschedules_and_stops_after_failure(self) -> None:
         """Keep observation separate from catalogue dependencies and report terminal failures."""
@@ -85,12 +103,12 @@ class RunMetricsTests(unittest.TestCase):
         ti.get_task_states.return_value = {run: {'process_shows_0': 'deferred', 'catalogue': None}}
         requests: list[parent.ShowRequest] = [{'trigger_run_id': 'child', 'conf': {'show': 'test-show', 'show_url': 'https://example.org', 'from_date': '2026-10-01', 'to_date': '2026-10-31'}}]
         with patch.object(parent, 'get_current_context', return_value={'ti': ti}), patch.object(parent, 'show_metrics', return_value={'episodes': None, 'transcripts': None, 'chunks': None, 'embeddings': None}) as read, redirect_stdout(StringIO()) as output:
-            self.assertFalse(parent.monitor_run.function(requests, run).is_done)
+            self.assertFalse(parent.monitor_run(requests, run).is_done)
             self.assertIn('Selected shows (1): test-show', output.getvalue())
             self.assertIn('Date range (Europe/Paris): 2026-10-01 to 2026-10-31', output.getvalue())
             self.assertEqual(read.call_args.args[1], 'child')
             ti.get_task_states.return_value = {run: {'process_shows_0': 'failed', 'catalogue': 'upstream_failed'}}
-            result = parent.monitor_run.function(requests, run)
+            result = parent.monitor_run(requests, run)
             self.assertTrue(result.is_done)
             self.assertIn('failed', output.getvalue())
             self.assertIn('Final metrics', output.getvalue())

@@ -1,15 +1,16 @@
 """Resolve registered/new shows at trigger time, process them serially, then export HTML."""
 
 from collections.abc import Mapping
-from datetime import timedelta
 import os
+import math
 from pathlib import Path
 from typing import TypedDict, cast, NotRequired
 
-from airflow.sdk import DAG, Param, task, PokeReturnValue, get_current_context
+from airflow.sdk import DAG, Param, task, PokeReturnValue, get_current_context, Context
 from airflow.sdk.definitions.param import ParamsDict
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.providers.docker.operators.docker import DockerOperator
+from airflow.providers.standard.sensors.python import PythonSensor
 from docker.types import Mount
 from psycopg2.extensions import make_dsn
 
@@ -17,6 +18,21 @@ from radiofrance.libs.date_range import date_range
 from radiofrance.libs.run_metrics import ShowMetrics, show_metrics, describe_metrics, run_totals
 
 from radiofrance.libs.programmes import ProgrammeSelection, resolve_programmes, read_show_choices
+
+
+class UnboundedMonitorSensor(PythonSensor):
+    """Reschedule until the parent finishes, with no elapsed-time deadline.
+
+    Airflow requires a finite sensor timeout during construction/serialization.
+    Disable that deadline only in the worker before the standard sensor loop;
+    no nonfinite number is stored in the serialized DAG. Failures and cancellation
+    still propagate normally, and each unsuccessful check releases the worker.
+    """
+
+    def execute(self, context: Context) -> object:
+        """Run the normal Python sensor with an unlimited elapsed-time allowance."""
+        self.timeout = math.inf
+        return super().execute(context)
 
 
 class ShowConf(TypedDict):
@@ -61,8 +77,9 @@ the affected images. Fresh databases create the registry before episodes.
 Compose provides application DB credentials and Docker/model settings.
 
 ## Outputs and recovery
-Each show has data/runs/<UTC timestamp>/download/<show> metadata and explicit shared
-corpus references. Chunk/embedding completion directories end in --<show>.
+Each show has data/runs/<UTC timestamp>/<show>/download metadata and explicit shared
+corpus references. All stage records use data/runs/<timestamp>/<show>/<stage>.
+Processing and monitoring have no elapsed-time deadline; manual cancellation remains available.
 Successful shows commit independently; a failed show leaves those commits intact
 and does not prevent other already queued shows from running. The parent fails
 if any show fails. Each show generates description vectors from the same download artifacts before
@@ -155,13 +172,11 @@ including failed or skipped work. The monitor observes but does not hide failure
         user=f"{os.environ.get('RF_UID', '1000')}:{os.environ.get('RF_GID', '1000')}",
         network_mode=os.environ.get('RF_DOCKER_NETWORK', 'radiofrance_default'),
         mount_tmp_dir=False, auto_remove='force', do_xcom_push=False, mem_limit='1g',
-        execution_timeout=timedelta(minutes=15),
         doc_md='After verified database loading, read all committed episode metadata in a read-only snapshot. '
             'Refresh the shared static HTML catalogue and count manifest under data/catalogue, '
             'using the host UID/GID. No database writes, model inference or web publication. '
             'A failure leaves the successful database import intact; a fresh pipeline run can regenerate the site.',
     )
-    @task.sensor(poke_interval=10, timeout=7 * 24 * 3600, mode='reschedule')
     def monitor_run(requests: list[ShowRequest], run_id: str) -> PokeReturnValue:
         """Publish one live log for selected shows while child DAGs and catalogue run.
 
@@ -169,6 +184,7 @@ including failed or skipped work. The monitor observes but does not hide failure
         states through Airflow's SDK. Persist the last printed messages in XCom
         between reschedules, logging the selected shows first and then only changes. Return final per-show metrics
         and terminal states in XCom; failed stages remain failures in the parent.
+        Monitoring has no elapsed-time deadline; cancellation still stops it.
         No application DB access, model loading or artifact writes occur here.
         """
         ti = get_current_context().get('ti')
@@ -206,5 +222,12 @@ including failed or skipped work. The monitor observes but does not hide failure
             print('Final processing states: ' + str(states), flush=True)
         return PokeReturnValue(is_done=done, xcom_value={'shows': metrics, 'totals': run_totals(metrics), 'states': states} if done else None)
 
-    monitoring = monitor_run(requests)  # pyright: ignore[reportArgumentType, reportCallIssue]
+    monitoring = UnboundedMonitorSensor(
+        task_id='monitor_run', python_callable=monitor_run,
+        op_kwargs={'requests': requests, 'run_id': '{{ run_id }}'},
+        poke_interval=10, mode='reschedule',
+        doc_md='Publish unified per-show metrics every ten seconds until processing and catalogue tasks finish. '
+            'Reschedule between checks without an elapsed-time deadline. Read only artifacts and task states; '
+            'persist log deduplication in XCom. Failures remain failures and cancellation stops monitoring.',
+    )
     _ = shows >> catalogue

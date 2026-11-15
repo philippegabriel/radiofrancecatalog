@@ -58,6 +58,36 @@ class EmbeddingJobTests(unittest.TestCase):
             (snapshot / name).symlink_to(Path('../../blobs') / blob.name)
         return root
 
+    def test_interrupted_shared_run_reuses_completed_episode(self) -> None:
+        """A later episode failure leaves the first validated matrix reusable without inference."""
+        from unittest.mock import patch
+        from radiofrance.libs.storage import EMBEDDING_DIRECTORY
+        with tempfile.TemporaryDirectory() as temporary:
+            data = Path(temporary) / 'data'
+            data.mkdir()
+            source = self.source(data / 'chunks')
+            manifest = json.loads(source.read_text())
+            other = source.parent / 'other_5.csv'
+            other.write_text((source.parent / 'episode_5.csv').read_text().replace('episode_5', 'other_5'))
+            manifest['chunks'].append({'episode_id': 'other_5', 'path': other.name, 'chunk_count': 2})
+            manifest.update(episode_count=2, chunk_count=4)
+            source.write_text(json.dumps(manifest))
+            model = self.model(data / 'model')
+            encoder = FakeEncoder()
+            with patch.object(encoder, 'encode', side_effect=[FakeEncoder().encode(['one', 'two']), RuntimeError('interrupted')]):
+                with self.assertRaisesRegex(RuntimeError, 'interrupted'):
+                    job.run_embedding(source, data / 'runs/first/show/embedding', model,
+                        batch_size=2, encoder=encoder, data_root=data)
+            self.assertTrue((data / EMBEDDING_DIRECTORY / 'episode_5.npy').is_file())
+            self.assertFalse((data / 'runs/first/show/embedding/manifest.json').exists())
+            with patch.object(encoder, 'encode', wraps=FakeEncoder().encode) as encode:
+                output = data / 'runs/retry/show/embedding'
+                job.run_embedding(source, output, model, batch_size=2, encoder=encoder, data_root=data)
+                self.assertEqual(encode.call_count, 1)
+            self.assertEqual(job.verify_output(output, source)['chunk_count'], 4)
+            progress = json.loads((output / 'progress.json').read_text())
+            self.assertEqual((progress['cached'], progress['generated']), (2, 2))
+
     def test_publication_and_provenance(self) -> None:
         """Preserve identities, version configuration, publish readable files and reject overwrite."""
         with tempfile.TemporaryDirectory() as temporary:

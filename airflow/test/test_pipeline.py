@@ -24,6 +24,19 @@ class XcomReader:
 
 
 class PipelineTests(unittest.TestCase):
+    def test_processing_has_no_task_or_dag_deadlines(self) -> None:
+        """Large historical runs are not capped by stage, coordinator or parent limits."""
+        import radiofrance_download
+        import radiofrance_chunk
+        import radiofrance_embedding
+        import radiofrance_description_embedding
+        import radiofrance_database
+        for dag in (parent.dag, pipeline.dag, radiofrance_download.dag, radiofrance_chunk.dag,
+                    radiofrance_embedding.dag, radiofrance_description_embedding.dag, radiofrance_database.dag):
+            self.assertIsNone(dag.dagrun_timeout, dag.dag_id)
+            for operator in dag.tasks:
+                self.assertIsNone(operator.execution_timeout, f'{dag.dag_id}.{operator.task_id}')
+
     def test_parent_resolves_and_queues_registry_selection(self) -> None:
         """Freeze public registry output and keep catalogue behind all mapped show successes."""
         self.assertEqual(parent.dag.task_ids, ['select_shows', 'process_shows', 'catalogue', 'monitor_run'])
@@ -95,7 +108,7 @@ class PipelineTests(unittest.TestCase):
         state = pipeline.prepare_pipeline.function(run, params)
         other = pipeline.prepare_pipeline.function(run + '-two', {'show': 'other-show',
             'show_url': 'https://www.radiofrance.fr/franceinter/podcasts/other-show'})
-        self.assertEqual(state['download']['folder'], '2026-11-03_14-30-00-123456Z/download/new-show')
+        self.assertEqual(state['download']['folder'], '2026-11-03_14-30-00-123456Z/new-show/download')
         self.assertNotEqual(state['chunk']['folder'], other['chunk']['folder'])
         stages: list[tuple[pipeline.TriggerDagRunOperator, pipeline.Stage]] = [
             (pipeline.download, 'download'), (pipeline.chunk, 'chunk'),

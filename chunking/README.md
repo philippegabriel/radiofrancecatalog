@@ -10,16 +10,16 @@ Per-episode CSVs retain the seven-column format: episode ID, chunk number, start
 and end segment indices, start and end timestamps, and text.
 
 Files accumulate under `data/chunks/segment-characters-v1-1000-300`. Completion
-manifests live under its `runs/<timestamp>` subdirectory. Existing equal CSVs are
-reused; conflicting content fails. No network or model inference is needed.
+manifests live under `data/runs/<timestamp>/<show>/chunk/`. Existing CSVs are
+validated and reused by episode ID and strategy. No network or model inference is needed.
 
 Native example (choose an existing download and a new output timestamp):
 
 ```bash
 venv/airflow/bin/python -m radiofrance.jobs.chunk \
   --data-root data \
-  --download-manifest data/runs/2026-11-03_14-30-00-000000Z/download/manifest.json \
-  --output-dir data/chunks/segment-characters-v1-1000-300/runs/2026-11-03_14-30-00-000000Z
+  --download-manifest data/runs/2026-11-03_14-30-00-000000Z/SHOW/download/manifest.json \
+  --output-dir data/runs/2026-11-03_14-30-00-000000Z/SHOW/chunk
 ```
 
 The data mount is writable for corpus publication. Files are published atomically;

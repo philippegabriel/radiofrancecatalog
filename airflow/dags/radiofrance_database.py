@@ -1,7 +1,6 @@
 """Load a selected embedding artifact chain and verify the committed PostgreSQL results."""
 
 from collections.abc import Mapping
-from datetime import timedelta
 import os
 from pathlib import Path
 import re
@@ -13,8 +12,6 @@ from airflow.providers.docker.operators.docker import DockerOperator
 from docker.types import Mount
 from psycopg2.extensions import make_dsn
 
-from radiofrance.jobs.description_embedding import DIRECTORY as DESCRIPTION_DIRECTORY
-from radiofrance.libs.storage import CHUNK_DIRECTORY, EMBEDDING_DIRECTORY
 from radiofrance.jobs.database import Prepared, prepare, verify_database as verify_import
 from radiofrance.jobs.chunk import contained_file
 
@@ -26,9 +23,9 @@ class DatabaseRun(TypedDict):
 
 HOST = os.environ.get('RF_PROJECT_ROOT', '')
 DOWNLOADS = Path('/opt/radiofrance/data/runs')
-CHUNKS = Path('/opt/radiofrance/data') / CHUNK_DIRECTORY / 'runs'
-EMBEDDINGS = Path('/opt/radiofrance/data') / EMBEDDING_DIRECTORY / 'runs'
-DESCRIPTIONS = Path('/opt/radiofrance/data') / DESCRIPTION_DIRECTORY
+CHUNKS = Path('/opt/radiofrance/data')
+EMBEDDINGS = Path('/opt/radiofrance/data/runs')
+DESCRIPTIONS = Path('/opt/radiofrance/data/runs')
 NETWORK = os.environ.get('RF_DOCKER_NETWORK', 'radiofrance_default')
 DATABASE_ENV = {'PGHOST': os.environ.get('RF_DATABASE_HOST', 'postgres'),
     'PGPORT': os.environ.get('RF_DATABASE_PORT', '5432'), 'PGDATABASE': 'radiofrance', 'PGUSER': 'radiofrance'}
@@ -56,8 +53,8 @@ radiofrance_pipeline instead.
 ## Configuration and running
 Follow database/README.md. Build radiofrance-database:dev; Compose supplies the
 application PostgreSQL host, network and private password. Supply embedding_run as
-the UTC timestamp under the configured embedding corpus's runs directory. All data
-files are mounted read-only. Only application credentials reach the loader.
+<timestamp>/<show>/embedding relative to data/runs. All data
+corpus files are mounted read-only; a separate runs mount allows writing database/result.json after a successful commit. Only application credentials reach the loader.
 
 ## Results and recovery
 The selected manifests explicitly identify shared transcripts, chunk CSVs and NPY
@@ -87,14 +84,14 @@ verification alone or reload the same timestamp. No schema changes are required.
         if not NETWORK or not os.environ.get('RF_DATABASE_PASSWORD'):
             raise ValueError('Configure the database password and Docker network in Compose')
         name = params['embedding_run']
-        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,150}', name):
-            raise ValueError('embedding_run must be a single run directory basename')
+        if not re.fullmatch(r'[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*', name):
+            raise ValueError('embedding_run must be a relative run path (directory basename or timestamp/show/stage)')
         manifest = contained_file(EMBEDDINGS, f'{name}/manifest.json')
         state: DatabaseRun = {'embedding_run': name}
         description = params.get('description_run', '')
         if description:
-            if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,150}', description):
-                raise ValueError('description_run must be a single run directory basename')
+            if not re.fullmatch(r'[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*', description):
+                raise ValueError('description_run must be a relative run path (directory basename or timestamp/show/stage)')
             state['description_run'] = description
         selected_run(state)
         return state
@@ -124,16 +121,17 @@ verification alone or reload the same timestamp. No schema changes are required.
     load_database = DockerOperator(
         task_id='load_database', image='radiofrance-database:dev',
         docker_url='unix://var/run/docker.sock', api_version='auto',
-        command=['--embedding-manifest', f"/data/{EMBEDDING_DIRECTORY}/runs/{{{{ ti.xcom_pull(task_ids='prepare_load')['embedding_run'] }}}}/manifest.json",
-            '--chunk-root', f'/data/{CHUNK_DIRECTORY}/runs', '--download-root', '/data',
-            '--description-manifest', f"{{{{ '/data/{DESCRIPTION_DIRECTORY}/' + ti.xcom_pull(task_ids='prepare_load')['description_run'] + '/manifest.json' if ti.xcom_pull(task_ids='prepare_load').get('description_run') else '' }}}}"],
-        mounts=[Mount('/data', f'{HOST or "/not-configured"}/data', type='bind', read_only=True)],
+        command=['--embedding-manifest', f"/data/runs/{{{{ ti.xcom_pull(task_ids='prepare_load')['embedding_run'] }}}}/manifest.json",
+            '--result-file', "/results/{{ ti.xcom_pull(task_ids='prepare_load')['embedding_run'].rsplit('/', 1)[0] }}/database/result.json",
+            '--chunk-root', '/data', '--download-root', '/data',
+            '--description-manifest', f"{{{{ '/data/runs/' + ti.xcom_pull(task_ids='prepare_load')['description_run'] + '/manifest.json' if ti.xcom_pull(task_ids='prepare_load').get('description_run') else '' }}}}"],
+        mounts=[Mount('/data', f'{HOST or "/not-configured"}/data', type='bind', read_only=True),
+            Mount('/results', f'{HOST or "/not-configured"}/data/runs', type='bind')],
         environment=DATABASE_ENV,
         private_environment={'PGPASSWORD': os.environ.get('RF_DATABASE_PASSWORD', '')},
         user=f"{os.environ.get('RF_UID', '1000')}:{os.environ.get('RF_GID', '1000')}",
-        network_mode=NETWORK, mount_tmp_dir=False, auto_remove='force', mem_limit='1g',
-        execution_timeout=timedelta(minutes=30), do_xcom_push=False,
-        doc_md='Verify the selected run name and load its artifact chain in one transaction as the radiofrance application role. Uses read-only file mounts, the Compose database network and private password environment. No schema changes or model inference.',
+        network_mode=NETWORK, mount_tmp_dir=False, auto_remove='force', mem_limit='1g', do_xcom_push=False,
+        doc_md='Verify the selected run name and load its artifact chain in one transaction as the radiofrance application role. Uses a read-only corpus mount and a writable run-record mount to publish database/result.json after commit, the Compose database network and private password environment. No schema changes or model inference.',
     )
     checked = verify_database(state)  # pyright: ignore[reportArgumentType]
     _ = state >> load_database >> checked

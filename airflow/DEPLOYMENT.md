@@ -194,8 +194,9 @@ PostgreSQL using a read-only transaction on the Compose network. The database
 password is passed privately, and the API key is mounted read-only. The child
 writes outputs as your host UID/GID and is removed when finished. Its stdout
 appears in the task log; verification checks the show, metadata/transcript
-membership and artifact files. Outputs under `data/runs/<UTC timestamp>/download/`
-contain `episodes.json`, raw transcripts and a version-2 manifest. No catalogue
+membership and artifact files. Outputs under `data/runs/<UTC timestamp>/<show>/download/`
+contain only a version-2 manifest. Episode metadata and raw transcripts are shared
+under `data/episodes/` and `data/transcripts/`. No catalogue
 CSV is read or written. There are no S3 calls, asset events or DB writes here.
 
 The cutoff advances only after the final database stage commits new episodes.

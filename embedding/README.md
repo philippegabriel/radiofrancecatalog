@@ -37,8 +37,8 @@ sudo docker run --rm --init --network none --memory 4g \
   --mount type=bind,src="$HOME/.cache/huggingface/hub",dst=/home/embedding/.cache/huggingface/hub,readonly \
   --mount type=bind,src="$PWD/data",dst=/data \
   radiofrance-embedding:dev --data-root /data \
-  --chunk-manifest /data/chunks/segment-characters-v1-1000-300/runs/TIMESTAMP/manifest.json \
-  --output-dir /data/embeddings/embeddinggemma2-fp32-256/914f7f89142e33e77833254d9c9b90c3cef7303b/segment-characters-v1-1000-300/runs/NEW_TIMESTAMP
+  --chunk-manifest /data/runs/TIMESTAMP/SHOW/chunk/manifest.json \
+  --output-dir /data/runs/NEW_TIMESTAMP/SHOW/embedding
 ```
 
 If your host cache is elsewhere, change the mount source. Mount the entire `hub`

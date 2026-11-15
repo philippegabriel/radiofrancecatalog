@@ -1,14 +1,13 @@
 """Embed a completed chunk run with offline SentenceTransformers FP32."""
 
 from collections.abc import Mapping
-from datetime import timedelta
 import os
 from pathlib import Path
 import re
 from typing import TypedDict
 
 from radiofrance.libs.runs import run_folder
-from radiofrance.libs.storage import CHUNK_DIRECTORY, EMBEDDING_DIRECTORY
+from radiofrance.libs.storage import run_reference
 
 from airflow.sdk import DAG, Param, task
 from airflow.sdk.definitions.param import ParamsDict
@@ -23,8 +22,8 @@ class EmbeddingRun(TypedDict):
     output_folder: str
 
 
-CHUNKS = Path('/opt/radiofrance/data') / CHUNK_DIRECTORY / 'runs'
-OUTPUTS = Path('/opt/radiofrance/data') / EMBEDDING_DIRECTORY / 'runs'
+CHUNKS = Path('/opt/radiofrance/data/runs')
+OUTPUTS = Path('/opt/radiofrance/data/runs')
 CACHE_HOST = os.environ.get('RF_HF_HUB_CACHE', '')
 HOST = os.environ.get('RF_PROJECT_ROOT') or '/not-configured'
 
@@ -41,15 +40,12 @@ For a full run, trigger radiofrance_pipeline instead.
 ## Configuration and running
 Follow embedding/README.md to build radiofrance-embedding:dev and download the
 pinned model into the standard Hugging Face cache. Set RF_HF_HUB_CACHE in .env.
-Supply chunk_run as the UTC timestamp under the configured chunk strategy's runs
-folder. The parent explicitly passes the show and output folder. The container has no network and the model mount is
+Supply chunk_run as <timestamp>/<show>/chunk relative to data/runs. The parent explicitly passes the show and output folder. The container has no network and the model mount is
 read-only. Host UID/GID is used to publish shared data files.
 
 ## Outputs and recovery
-NPY files accumulate under data/embeddings/embeddinggemma2-fp32-256/
-segment-characters-v1-1000-300, one matrix per episode. The runs/<UTC timestamp>
-subdirectory contains a completion manifest only. Existing matrices are validated
-and reused without model inference. A sibling <run>.progress.json sidecar reports
+NPY files accumulate under data/embeddings/transcripts/<model-and-revision>/256/segment-characters-v1-1000-300, one matrix per episode. Completion manifests live under data/runs/<timestamp>/<show>/embedding/. Each validated episode matrix is published immediately, even if a later episode fails. Existing matrices are validated
+and reused without model inference. A progress.json file in the stage run directory reports
 model loading and inference-only throughput after ten new vectors, then every
 hundred. radiofrance_pipeline.monitor_run reads it for unified parent logging;
 the final record contains generated/cached counts and duration. Empty runs need no model inference. A new run
@@ -70,7 +66,7 @@ can resume from files already present; existing completion records are not overw
         if not os.environ.get('RF_PROJECT_ROOT') or not Path(HOST).is_absolute():
             raise ValueError('Configure the host path before triggering this DAG')
         name = params['chunk_run']
-        if not re.fullmatch(r'[A-Za-z0-9_-]+', name):
+        if not re.fullmatch(r'[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*', name):
             raise ValueError('chunk_run must be the UTC timestamp chunk directory name')
         if not OUTPUTS.is_dir():
             raise ValueError('Create the shared embedding corpus directories and recreate Compose')
@@ -80,8 +76,8 @@ can resume from files already present; existing completion records are not overw
             raise ValueError('Chunk show does not match selected show')
         if not CACHE_HOST or not Path(CACHE_HOST).is_absolute():
             raise ValueError('Set RF_HF_HUB_CACHE in .env to the absolute host Hugging Face hub cache path')
-        output_folder = params.get('output_folder') or run_folder(run_id)
-        if not re.fullmatch(r'[A-Za-z0-9_-]+', output_folder):
+        output_folder = params.get('output_folder') or f"{run_folder(run_id)}/{source['show']}/embedding"
+        if not re.fullmatch(r'[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*', output_folder):
             raise ValueError('Invalid output folder')
         return {'chunk_run': name, 'output_folder': output_folder}
 
@@ -94,7 +90,7 @@ can resume from files already present; existing completion records are not overw
         return no value. Log the completed output manifest path on success.
         """
         manifest = verify_output(OUTPUTS / state['output_folder'], CHUNKS / state['chunk_run'] / 'manifest.json')
-        if manifest['source_run'] != state['chunk_run']:
+        if manifest['source_run'] != run_reference(CHUNKS / state['chunk_run']):
             raise ValueError('Embedding output does not match the selected chunk/model provenance')
         print(f"Verified {manifest['chunk_count']} embeddings: shared embedding manifest: {state['output_folder']}/manifest.json")
 
@@ -102,15 +98,14 @@ can resume from files already present; existing completion records are not overw
     embed = DockerOperator(
         task_id='embed', image='radiofrance-embedding:dev',
         docker_url='unix://var/run/docker.sock', api_version='auto',
-        command=['--chunk-manifest', f"/data/{CHUNK_DIRECTORY}/runs/{{{{ ti.xcom_pull(task_ids='prepare_embedding')['chunk_run'] }}}}/manifest.json",
-            '--output-dir', f"/data/{EMBEDDING_DIRECTORY}/runs/{{{{ ti.xcom_pull(task_ids='prepare_embedding')['output_folder'] }}}}",
+        command=['--chunk-manifest', f"/data/runs/{{{{ ti.xcom_pull(task_ids='prepare_embedding')['chunk_run'] }}}}/manifest.json",
+            '--output-dir', f"/data/runs/{{{{ ti.xcom_pull(task_ids='prepare_embedding')['output_folder'] }}}}",
             '--data-root', '/data', '--batch-size', '1', '--threads', '4'],
         mounts=[Mount('/data', f'{HOST}/data', type='bind'),
             Mount('/home/embedding/.cache/huggingface/hub', CACHE_HOST or '/not-configured-hf-cache', type='bind', read_only=True)],
         environment={'HF_HUB_OFFLINE': '1', 'TRANSFORMERS_OFFLINE': '1'},
         user=f"{os.environ.get('RF_UID', '1000')}:{os.environ.get('RF_GID', '1000')}",
-        mount_tmp_dir=False, network_mode='none', mem_limit='4g', auto_remove='force',
-        execution_timeout=timedelta(hours=2), do_xcom_push=False,
+        mount_tmp_dir=False, network_mode='none', mem_limit='4g', auto_remove='force', do_xcom_push=False,
         doc_md='Load the pinned Google model once on CPU in FP32; read verified chunk CSVs, produce normalized 256D FP32 NPY and a completion manifest. No network, credentials or database access.',
     )
     checked = verify_embeddings(state)  # pyright: ignore[reportArgumentType]

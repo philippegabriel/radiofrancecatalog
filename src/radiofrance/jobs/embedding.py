@@ -13,7 +13,7 @@ import tempfile
 import time
 from radiofrance.libs.progress import EmbeddingReporter
 from typing import Protocol, TypedDict, cast, NotRequired
-from radiofrance.libs.storage import artifact_root, publish, shared_metadata, EMBEDDING_DIRECTORY, MODEL_REVISION
+from radiofrance.libs.storage import ensure_directory, artifact_root, publish, shared_metadata, EMBEDDING_DIRECTORY, MODEL_REVISION, run_reference
 
 import numpy as np
 
@@ -213,7 +213,7 @@ def verify_output(directory: Path, source_manifest: Path | None = None) -> Embed
         source = validate_input(source_manifest)
         expected = {item['episode_id']: item['chunk_count'] for item in source['chunks']}
         actual = {item['episode_id']: item['chunk_count'] for item in manifest['embeddings']}
-        if (manifest['source_run'] != source_manifest.parent.name
+        if (manifest['source_run'] != run_reference(source_manifest.parent)
                 or manifest['show'] != source['show'] or expected != actual):
             raise ValueError('Embedding output does not match its chunk source')
     return manifest
@@ -228,7 +228,7 @@ def run_embedding(source_manifest: Path, output: Path, model_cache: Path, batch_
     network access occurs. With data_root, validated existing matrices are reused and
     only the stage manifest is run-specific. Failures remove staging, while already
     published corpus files remain reusable. Existing completion outputs are rejected.
-    A sibling <output-name>.progress.json sidecar exposes model loading, cached
+    A run-scoped progress.json (a sibling sidecar for self-contained runs) exposes model loading, cached
     counts, inference-only rate and ETA after ten vectors and then each hundred.
     Completed metrics persist there; incomplete phases are not success markers.
     The optional encoder is an offline-test seam, never a CLI substitution.
@@ -237,7 +237,7 @@ def run_embedding(source_manifest: Path, output: Path, model_cache: Path, batch_
         data_root = data_root.resolve()
         output = output.resolve()
         source_manifest = source_manifest.resolve()
-    if output.exists():
+    if output.exists() and (data_root is None or (output / 'manifest.json').exists()):
         raise FileExistsError(f'Use a fresh output directory: {output}')
     if batch_size < 1 or threads < 1:
         raise ValueError('Batch size and threads must be positive')
@@ -248,10 +248,10 @@ def run_embedding(source_manifest: Path, output: Path, model_cache: Path, batch_
         'normalized': True, 'document_prefix': DOCUMENT_PREFIX, 'query_prefix': QUERY_PREFIX,
         'max_tokens': MAX_TOKENS, 'batch_size': batch_size, 'threads': threads,
         'packages': {name: version(name) for name in ('torch', 'transformers', 'sentence-transformers')} if encoder is None and source['chunk_count'] else {}}
-    output.parent.mkdir(parents=True, exist_ok=True)
+    ensure_directory(output.parent)
     cached_count = sum(item['chunk_count'] for item in source['chunks']
         if data_root is not None and (data_root / EMBEDDING_DIRECTORY / f"{item['episode_id']}.npy").is_file())
-    progress = EmbeddingReporter(output, source['chunk_count'], cached_count)
+    progress = EmbeddingReporter(output, source['chunk_count'], cached_count, shared=data_root is not None)
     with tempfile.TemporaryDirectory(prefix='.embedding-job-', dir=output.parent) as temporary:
         staging = Path(temporary)
         artifacts: list[EmbeddingArtifact] = []
@@ -285,28 +285,29 @@ def run_embedding(source_manifest: Path, output: Path, model_cache: Path, batch_
                     matrix[index] = vector
                 progress.encoded(len(batch), encoding_seconds)
             np.save(target, matrix, allow_pickle=False)
-            artifacts.append({'episode_id': item['episode_id'], 'path': target.name,
+            read_vectors(target, item['episode_id'], len(rows))
+            published_path = target.name
+            if data_root is not None and cached is not None:
+                publish(target, cached)
+                target.unlink()
+                published_path = str(cached.relative_to(data_root))
+            artifacts.append({'episode_id': item['episode_id'], 'path': published_path,
                 'chunk_count': len(rows)})
             print(f"Embedded {len(rows)} chunks: {item['episode_id']}", flush=True)
         manifest: EmbeddingManifest = {'version': 3, 'stage': 'embedding', 'show': source['show'],
-            'source_run': source_manifest.parent.name,
+            'source_run': run_reference(source_manifest.parent),
             'configuration': config, 'episode_count': len(artifacts),
             'chunk_count': sum(item['chunk_count'] for item in artifacts), 'embeddings': artifacts}
         if data_root is not None:
-            for item in artifacts:
-                local = staging / item['path']
-                if not local.is_file():
-                    continue
-                target = data_root / EMBEDDING_DIRECTORY / local.name
-                publish(local, target)
-                local.unlink()
-                item['path'] = str(target.relative_to(data_root))
             manifest['artifact_root'] = str(shared_metadata(manifest, output, data_root)['artifact_root'])
         write_json(staging / 'manifest.json', manifest)
-        if data_root is None:
-            verify_output(staging, source_manifest)
+        verify_output(staging, source_manifest)
         readable_tree(staging)
-        staging.rename(output)
+        if data_root is not None:
+            ensure_directory(output)
+            (staging / 'manifest.json').replace(output / 'manifest.json')
+        else:
+            staging.rename(output)
     verify_output(output, source_manifest)
     progress.publish('completed')
     return manifest

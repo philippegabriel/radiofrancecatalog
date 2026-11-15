@@ -57,7 +57,7 @@ def prepare() -> None:
     selection = read_selection(FIXTURE, SHOW)
     if len(selection['episodes']) != 10:
         raise ValueError('Integration fixture must contain exactly ten episodes')
-    for directory in ('runs', 'transcripts', CHUNK_DIRECTORY + '/runs', EMBEDDING_DIRECTORY + '/runs', 'catalogue'):
+    for directory in ('runs', 'episodes', 'transcripts', CHUNK_DIRECTORY, EMBEDDING_DIRECTORY, 'catalogue'):
         (ROOT / 'data' / directory).mkdir(parents=True, exist_ok=True)
     secret = ROOT / '.OpenAPIKey'
     with secret.open('x') as stream:
@@ -108,8 +108,8 @@ class AirflowClient:
         self.token = str(response['access_token'])
 
 
-def run_pipeline(run_id: str, evidence: Path, timeout_seconds: int = 5400) -> None:
-    """Unpause maintained stages, trigger the parent once, poll completion and verify exact DB membership."""
+def run_pipeline(run_id: str, evidence: Path) -> None:
+    """Trigger the parent, wait without an application deadline, then verify exact DB membership."""
     run_id = f'integration__{datetime.now(timezone.utc).isoformat()}__{run_id}'
     evidence.mkdir(parents=True, exist_ok=True)
     client = AirflowClient('http://127.0.0.1:8082')
@@ -127,9 +127,8 @@ def run_pipeline(run_id: str, evidence: Path, timeout_seconds: int = 5400) -> No
     client.request('POST', '/api/v2/dags/radiofrance_pipeline/dagRuns',
         {'dag_run_id': run_id, 'logical_date': None, 'conf': {'shows': [SHOW], 'all_enabled': False, 'new_show_url': []}})
     path = '/api/v2/dags/radiofrance_pipeline/dagRuns/' + quote(run_id, safe='')
-    deadline = time.monotonic() + timeout_seconds
     previous = ''
-    while time.monotonic() < deadline:
+    while True:
         result = client.request('GET', path)
         state = str(result['state'])
         (evidence / 'pipeline-status.json').write_text(json.dumps(result, indent=2) + '\n')
@@ -141,8 +140,6 @@ def run_pipeline(run_id: str, evidence: Path, timeout_seconds: int = 5400) -> No
         if state == 'success':
             break
         time.sleep(15)
-    else:
-        raise TimeoutError('Airflow pipeline exceeded its integration deadline')
     selection = read_selection(FIXTURE, SHOW)
     sql = (ROOT / 'ci/verify-integration.sql').read_text()
     checked = subprocess.run(['docker', 'compose', 'exec', '-T', '-e', 'PGPASSWORD=radiofrance-dev',

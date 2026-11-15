@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import tempfile
 from typing import TypedDict, cast, NotRequired
-from radiofrance.libs.storage import artifact_root, publish, shared_metadata, CHUNK_DIRECTORY
+from radiofrance.libs.storage import ensure_directory, artifact_root, publish, shared_metadata, CHUNK_DIRECTORY
 
 
 class TranscriptArtifact(TypedDict):
@@ -137,17 +137,30 @@ def run_chunking(source_manifest: Path, output: Path, data_root: Path | None = N
     source = validate_source(source_manifest)
     strategy: ChunkStrategy = {'name': 'segment-characters', 'version': 1,
                               'target_size': TARGET_SIZE, 'min_size': MIN_SIZE}
-    output.parent.mkdir(parents=True, exist_ok=True)
+    ensure_directory(output.parent)
     with tempfile.TemporaryDirectory(prefix='.chunk-job-', dir=output.parent) as temporary:
         staging = Path(temporary)
         artifacts: list[ChunkArtifact] = []
         for item in source['transcripts']:
             transcript = contained_file(artifact_root(source_manifest.parent), item['path'])
             target = staging / f"{item['episode_id']}.csv"
-            with target.open('w', encoding='utf-8', newline='') as stream:
-                chunk_count = transcript_to_csv(transcript, stream)
-            artifacts.append({'episode_id': item['episode_id'], 'path': target.name,
-                              'chunk_count': chunk_count})
+            cached = data_root / CHUNK_DIRECTORY / target.name if data_root is not None else None
+            if cached is not None and cached.is_file():
+                with cached.open(newline='', encoding='utf-8') as stream:
+                    rows = list(csv.reader(stream))
+                if any(len(row) != 7 or row[0] != item['episode_id'] or row[1] != str(index)
+                       for index, row in enumerate(rows)):
+                    raise ValueError('Invalid cached chunk rows')
+                chunk_count = len(rows)
+            else:
+                with target.open('w', encoding='utf-8', newline='') as stream:
+                    chunk_count = transcript_to_csv(transcript, stream)
+                if cached is not None:
+                    publish(target, cached)
+                    target.unlink()
+            artifacts.append({'episode_id': item['episode_id'],
+                'path': str(cached.relative_to(data_root)) if data_root is not None and cached is not None else target.name,
+                'chunk_count': chunk_count})
         manifest: ChunkManifest = {
             'version': 1, 'stage': 'chunking', 'show': source['show'],
             'source_run': source_manifest.parent.name,
@@ -155,17 +168,10 @@ def run_chunking(source_manifest: Path, output: Path, data_root: Path | None = N
             'chunk_count': sum(item['chunk_count'] for item in artifacts), 'chunks': artifacts,
         }
         if data_root is not None:
-            for item in artifacts:
-                local = staging / item['path']
-                target = data_root / CHUNK_DIRECTORY / local.name
-                publish(local, target)
-                local.unlink()
-                item['path'] = str(target.relative_to(data_root))
             manifest['source_run'] = str(source_manifest.parent.relative_to(data_root))
             manifest['artifact_root'] = str(shared_metadata(manifest, output, data_root)['artifact_root'])
         (staging / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
-        if data_root is None:
-            verify_output(staging)
+        verify_output(staging)
         for path in staging.iterdir():
             path.chmod(0o644)
         staging.chmod(0o755)

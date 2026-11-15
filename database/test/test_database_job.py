@@ -75,6 +75,8 @@ class DatabaseJobTests(unittest.TestCase):
     def test_ten_episode_integration_assertions(self) -> None:
         """Run the artifact chain with fake inference, then exercise CI's real SQL assertions."""
         import radiofrance.jobs.download as download_job
+        from radiofrance.jobs.description_embedding import run_embedding as embed_descriptions
+        from tests.test_description_embedding import vectors
         from radiofrance.libs.episode_selection import read_selection
         from tests.test_download_job import episode
         project = Path(__file__).resolve().parents[2]
@@ -116,9 +118,27 @@ class DatabaseJobTests(unittest.TestCase):
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn('episode without embeddings', rejected.stderr)
 
+    def test_cli_writes_run_result_after_commit(self) -> None:
+        """The optional filesystem result records a completed transactional load."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prepared = self.fixture(root)
+            result_file = root / 'run/database/result.json'
+            arguments = ['database', '--embedding-manifest', str(root / 'embeddings-run/manifest.json'),
+                '--chunk-root', str(root / 'chunks'), '--download-root', str(root / 'downloads'),
+                '--result-file', str(result_file)]
+            with patch('sys.argv', arguments), patch.dict(os.environ, {'RF_DATABASE_DSN': self.dsn}), patch('builtins.print'):
+                job.main()
+            record = json.loads(result_file.read_text())
+            self.assertEqual(record['catalogue_episode_count'], len(prepared['catalogue']))
+            self.assertEqual(record['chunk_count'], 1)
+            job.verify_database(prepared, self.dsn)
+
     def test_shared_corpus_reuse_and_database_lineage(self) -> None:
         """Repeat unfinished acquisition without downloading/embedding twice, then load exact shared lineage."""
         import radiofrance.jobs.download as download_job
+        from radiofrance.jobs.description_embedding import run_embedding as embed_descriptions
+        from tests.test_description_embedding import vectors
         from radiofrance.libs.storage import CHUNK_DIRECTORY, EMBEDDING_DIRECTORY
         from tests.test_download_job import episode
         identity = '11111111-1111-4111-8111-111111111111_5'
@@ -135,27 +155,29 @@ class DatabaseJobTests(unittest.TestCase):
             outputs: list[Path] = []
             for index in range(2):
                 name = f'2026-11-03_14-30-0{index}-000000Z'
-                download = data / 'runs' / name / 'download'
+                download = data / 'runs' / name / 'new-show/download'
                 with patch.object(download_job, 'fetch_all', return_value=iter([row])), patch.object(download_job, 'fetch_transcript', return_value=transcript) as fetch:
                     download_job.run_download(row['show'], download, 'test', 0, dsn=self.dsn, data_root=data,
                         show_url='https://www.radiofrance.fr/franceculture/podcasts/new-show')
                     self.assertEqual(fetch.call_count, 1 if index == 0 else 0)
-                chunk = data / CHUNK_DIRECTORY / 'runs' / name
+                chunk = data / 'runs' / name / 'new-show/chunk'
                 run_chunking(download / 'manifest.json', chunk, data_root=data)
-                output = data / EMBEDDING_DIRECTORY / 'runs' / name
+                output = data / 'runs' / name / 'new-show/embedding'
                 encoder = fixtures.FakeEncoder()
                 with patch.object(encoder, 'encode', wraps=encoder.encode) as encode:
                     run_embedding(chunk / 'manifest.json', output, cache, encoder=encoder, data_root=data)
                     self.assertEqual(encode.call_count, 1 if index == 0 else 0)
+                descriptions = data / 'runs' / name / 'new-show/description-embedding'
+                embed_descriptions(download / 'manifest.json', descriptions, cache, encode=vectors, data_root=data)
                 outputs.append(output)
-                self.assertEqual(len(list(download.iterdir())), 2)
+                self.assertEqual(len(list(download.iterdir())), 1)
                 self.assertEqual([p.name for p in chunk.iterdir()], ['manifest.json'])
-                self.assertEqual([p.name for p in output.iterdir()], ['manifest.json'])
+                self.assertEqual({p.name for p in output.iterdir()}, {'manifest.json', 'progress.json'})
             self.assertEqual(len(list((data / 'transcripts').glob('*.json'))), 1)
             self.assertEqual(len(list((data / CHUNK_DIRECTORY).glob('*.csv'))), 1)
             self.assertEqual(len(list((data / EMBEDDING_DIRECTORY).glob('*.npy'))), 1)
             for output in outputs:
-                prepared = job.prepare(output / 'manifest.json', data / CHUNK_DIRECTORY / 'runs', data)
+                prepared = job.prepare(output / 'manifest.json', data, data, output.parent / 'description-embedding/manifest.json')
                 job.load(prepared, self.dsn)
                 job.verify_database(prepared, self.dsn)
             self.assertEqual(self.counts(), (2, 1, 1))
@@ -163,6 +185,8 @@ class DatabaseJobTests(unittest.TestCase):
     def test_incremental_json_download_advances_only_after_load(self) -> None:
         """Use real DB state across download, chunk, fake inference, load and a no-op retry."""
         import radiofrance.jobs.download as download_job
+        from radiofrance.jobs.description_embedding import run_embedding as embed_descriptions
+        from tests.test_description_embedding import vectors
         from radiofrance.libs.download_state import read_download_state
         from tests.test_download_job import episode
         with tempfile.TemporaryDirectory() as directory:
@@ -342,7 +366,7 @@ class DatabaseJobTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('RF_TEST_EMBEDDING_MANIFEST'), 'optional representative sample')
     def test_representative_sample(self) -> None:
         """Load actual previously generated vectors without downloading or running an encoder."""
-        prepared = job.prepare(Path(os.environ['RF_TEST_EMBEDDING_MANIFEST']), Path('data') / CHUNK_DIRECTORY / 'runs', Path('data'))
+        prepared = job.prepare(Path(os.environ['RF_TEST_EMBEDDING_MANIFEST']), Path('data'), Path('data'))
         result = job.load(prepared, self.dsn)
         self.assertEqual(self.counts(), (1, len(prepared['catalogue']), prepared['embeddings']['chunk_count']))
         self.assertTrue(job.load(prepared, self.dsn)['already_imported'])

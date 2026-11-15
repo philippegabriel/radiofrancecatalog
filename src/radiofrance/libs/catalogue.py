@@ -17,6 +17,15 @@ class CatalogueRow(TypedDict):
     id: str
 
 
+class EpisodeFiles(TypedDict, total=False):
+    path: str
+    paths: list[str]
+
+
+class EpisodeManifest(TypedDict):
+    episodes: EpisodeFiles
+
+
 FIELDS: list[str] = list(CatalogueRow.__annotations__)
 SHOWS: dict[str, str] = {
     'affaires-sensibles': 'franceinter',
@@ -40,3 +49,29 @@ def read_rows(path: str | Path, show: str) -> list[CatalogueRow]:
             raise ValueError('Invalid show or duplicate episode ID')
         seen.add(row['id'])
     return cast(list[CatalogueRow], raw)
+
+
+def read_episode_rows(directory: Path, show: str) -> list[CatalogueRow]:
+    """Read exactly the shared episode files selected by a download manifest.
+
+    Self-contained fixtures retain their single metadata list. Shared manifests
+    list individual episode paths, never scan the corpus to select work.
+    """
+    from radiofrance.libs.storage import artifact_root
+    manifest = cast(EpisodeManifest, json.loads((directory / 'manifest.json').read_text()))
+    root = artifact_root(directory)
+    selection = manifest['episodes']
+    if 'paths' not in selection and 'path' not in selection:
+        raise ValueError('Missing episode metadata selection')
+    paths = selection['paths'] if 'paths' in selection else [selection['path']]
+    if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
+        raise ValueError('Invalid episode metadata selection')
+    result: list[CatalogueRow] = []
+    for relative in paths:
+        path = (root / relative).resolve()
+        if Path(relative).is_absolute() or not path.is_relative_to(root.resolve()) or not path.is_file():
+            raise ValueError('Episode metadata must be a file inside data')
+        result.extend(read_rows(path, show))
+    if len({row['id'] for row in result}) != len(result):
+        raise ValueError('Duplicate episode metadata')
+    return result

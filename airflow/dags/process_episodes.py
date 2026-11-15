@@ -1,6 +1,5 @@
 """Serialize one show through its verified processing stage DAGs."""
 
-from datetime import timedelta
 from collections.abc import Mapping
 import re
 from typing import Literal, TypedDict
@@ -47,8 +46,7 @@ def run_reference(parent_run_id: str, stage: Stage, show: str) -> StageRun:
     """Name a stage run and its artifact folder using the stage jobs' run-ID convention."""
     child_run_id = f'pipeline__{parent_run_id}__{stage}'
     folder = run_folder(parent_run_id)
-    return {'run_id': child_run_id, 'folder': (f'{folder}/download/{show}' if stage == 'download'
-        else f'{folder}--{show}')}
+    return {'run_id': child_run_id, 'folder': f"{folder}/{show}/{stage.replace('_', '-')}"}
 
 
 def stage_operator(stage: Stage, configuration: StageConf | None = None) -> TriggerDagRunOperator:
@@ -64,7 +62,6 @@ def stage_operator(stage: Stage, configuration: StageConf | None = None) -> Trig
         conf=dict(configuration or {}), wait_for_completion=True, deferrable=True,
         fail_when_dag_is_paused=True, reset_dag_run=False, skip_when_already_exists=False,
         allowed_states=['success'], failed_states=['failed'], poke_interval=15,
-        execution_timeout=timedelta(hours=4),
         doc_md=f'Trigger radiofrance_{stage} with this pipeline run’s explicit child identity and upstream directory. Wait without holding a worker slot. Continue only after child success; fail if the stage fails or is paused. Existing child runs are never reset automatically.',
     )
 
@@ -96,18 +93,18 @@ show suggestions during parsing. Suggestions do not restrict newly registered
 shows passed by the parent before the next DAG refresh.
 For standalone recovery select a registered show; show_url can be left blank
 to resolve its registered URL at task execution time.
+Processing stages and this coordinator have no elapsed-time deadline.
 Host paths, credentials and model cache come from Compose. Parent and child
 triggerers must be running. Automatic retries and child resets are disabled.
 
 ## Outputs
-Download records go under data/runs/<parent UTC timestamp>/download/<show>.
-Chunk and embedding completion folders use <timestamp>--<show>. Corpus files
+Download records go under data/runs/<parent UTC timestamp>/<show>/download.
+Each stage records its manifest under data/runs/<timestamp>/<show>/<stage>. Corpus files
 accumulate by episode and configuration. This DAG does not export HTML; the parent
-does so once after all selected shows succeed. Description NPY files, their manifest and progress sidecar live under
-data/embeddings/episode-descriptions/<revision>/runs/<timestamp>--<show>. See docs/storage.md.
+does so once after all selected shows succeed. Description NPY files and text snapshots are shared under
+data/embeddings/descriptions/<model-and-revision>/256. See docs/storage.md.
 """,
-    schedule=None, catchup=False, max_active_runs=1,
-    dagrun_timeout=timedelta(hours=6), default_args={'retries': 0},
+    schedule=None, catchup=False, max_active_runs=1, default_args={'retries': 0},
     params=ParamsDict({
         'from_date': Param(None, type=['null', 'string'], format='date', description='Inclusive Paris broadcast date; optional historical selection.'),
         'to_date': Param(None, type=['null', 'string'], format='date', description='Inclusive Paris broadcast date; leave both dates blank for incremental mode.'),

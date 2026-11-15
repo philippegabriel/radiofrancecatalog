@@ -23,7 +23,7 @@ class DatabaseDagTests(unittest.TestCase):
         self.assertEqual(worker.downstream_task_ids, {'verify_database'})
         self.assertEqual(worker.image, 'radiofrance-database:dev')
         self.assertEqual(worker.network_mode, dag_module.NETWORK)
-        self.assertEqual([m['ReadOnly'] for m in worker.mounts], [True])
+        self.assertEqual([m['ReadOnly'] for m in worker.mounts], [True, False])
         self.assertEqual(worker.environment['PGUSER'], 'radiofrance')
         self.assertEqual(worker.environment['PGDATABASE'], 'radiofrance')
         self.assertNotIn('PGPASSWORD', worker.environment)

@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import tempfile
 import time
-from typing import TypedDict, cast
+from typing import TypedDict, cast, NotRequired
 
 import numpy as np
 
@@ -15,11 +15,11 @@ from radiofrance.jobs.chunk import contained_file, validate_source
 from radiofrance.jobs.embedding import (DIMENSIONS, MAX_TOKENS, MODEL_ID, MODEL_REVISION,
     QUERY_PREFIX, SentenceEncoder, cached_snapshot, default_model_cache, readable_tree,
     read_vectors, verify_model, write_json)
-from radiofrance.libs.catalogue import read_rows
+from radiofrance.libs.catalogue import read_episode_rows
 from radiofrance.libs.progress import EmbeddingReporter
-from radiofrance.libs.storage import artifact_root
+from radiofrance.libs.storage import ensure_directory, artifact_root, DESCRIPTION_DIRECTORY, shared_metadata, replace_file
 
-DIRECTORY = f'embeddings/episode-descriptions/{MODEL_REVISION}/runs'
+DIRECTORY = DESCRIPTION_DIRECTORY
 TEMPLATE = 'title: {title} | text: {description}'
 type Encode = Callable[[list[str]], list[list[float]]]
 
@@ -44,6 +44,7 @@ class Description(TypedDict):
 
 
 class Manifest(TypedDict):
+    artifact_root: NotRequired[str]
     version: int
     stage: str
     show: str
@@ -53,12 +54,15 @@ class Manifest(TypedDict):
     descriptions: list[Description]
 
 
-class Artifact(TypedDict):
-    path: str
+class Snapshot(TypedDict):
+    title: str
+    description: str
+    configuration: Configuration
 
 
-class Metadata(TypedDict):
-    episodes: Artifact
+def snapshot(item: Description) -> Snapshot:
+    """Identify the exact text and encoder configuration behind a cached vector."""
+    return {'title': item['title'], 'description': item['description'], 'configuration': configuration()}
 
 
 def configuration() -> Configuration:
@@ -72,9 +76,8 @@ def selection(source_manifest: Path) -> tuple[str, str, list[Description]]:
     """Read selected metadata and transcripts; return nonblank descriptions with external IDs."""
     source_manifest = source_manifest.resolve()
     source = validate_source(source_manifest)
-    metadata = cast(Metadata, json.loads(source_manifest.read_text()))
     root = artifact_root(source_manifest.parent)
-    rows = read_rows(contained_file(root, metadata['episodes']['path']), source['show'])
+    rows = read_episode_rows(source_manifest.parent, source['show'])
     ids = {row['id'] for row in rows}
     if len(rows) != source['new_episode_count'] or ids != {item['episode_id'] for item in source['transcripts']}:
         raise ValueError('Description/download membership mismatch')
@@ -102,42 +105,60 @@ def verify_output(output: Path, source_manifest: Path | None = None) -> Manifest
     for item in descriptions:
         if (not re.fullmatch(r'[0-9a-f]{8}-[0-9a-f-]{27}_[0-9]+', item['episode_id'])
                 or not isinstance(item['title'], str) or not item['description'].strip()
-                or item['path'] != item['episode_id'] + '.npy'):
+                or Path(item['path']).name != item['episode_id'] + '.npy'):
             raise ValueError('Invalid description snapshot or path')
-        read_vectors(contained_file(output, item['path']), item['episode_id'], 1)
+        vector_path = contained_file(artifact_root(output), item['path'])
+        read_vectors(vector_path, item['episode_id'], 1)
+        if manifest.get('artifact_root'):
+            if json.loads(vector_path.with_suffix('.json').read_text()) != snapshot(item):
+                raise ValueError('Description cache snapshot mismatch')
     if source_manifest is not None:
         show, source, expected = selection(source_manifest)
-        if manifest['show'] != show or manifest['source_run'] != source or descriptions != expected:
+        actual = [{**item, 'path': Path(item['path']).name} for item in descriptions]
+        if manifest['show'] != show or manifest['source_run'] != source or actual != expected:
             raise ValueError('Description/download lineage or snapshot mismatch')
     return manifest
 
 
 def run_embedding(source_manifest: Path, output: Path, cache: Path, batch_size: int = 4,
-                  threads: int = 4, encode: Encode | None = None) -> Manifest:
+                  threads: int = 4, encode: Encode | None = None, data_root: Path | None = None) -> Manifest:
     """Atomically publish offline description NPY files and a run manifest before DB loading.
 
     Load the model only for nonempty selections, once per job. No database client,
-    credentials, download APIs or network access are required. Stage all outputs;
-    failed jobs leave no completion directory. A sibling progress JSON feeds the
+    credentials, download APIs or network access are required. In shared mode each
+    validated vector is published immediately with a text snapshot as its cache
+    completion marker. Changed text regenerates the vector. Stage the run manifest
+    separately; failed jobs leave reusable vectors but no completion manifest. A sibling progress JSON feeds the
     parent monitor. Empty selections publish a verified empty manifest.
     """
-    if output.exists():
+    if data_root is not None:
+        data_root = data_root.resolve()
+        output = output.resolve()
+    if output.exists() and (data_root is None or (output / 'manifest.json').exists()):
         raise FileExistsError('Use a fresh description output directory')
     if batch_size < 1 or threads < 1:
         raise ValueError('Use positive batch and thread counts')
     show, source, descriptions = selection(source_manifest)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    progress = EmbeddingReporter(output, len(descriptions), 0)
+    ensure_directory(output.parent)
+    pending: list[Description] = []
+    for item in descriptions:
+        cached = data_root / DIRECTORY / item['path'] if data_root is not None else None
+        if data_root is not None and cached is not None and cached.is_file() and cached.with_suffix('.json').is_file() and json.loads(cached.with_suffix('.json').read_text()) == snapshot(item):
+            read_vectors(cached, item['episode_id'], 1)
+            item['path'] = str(cached.relative_to(data_root))
+        else:
+            pending.append(item)
+    progress = EmbeddingReporter(output, len(descriptions), len(descriptions) - len(pending), shared=data_root is not None)
     with tempfile.TemporaryDirectory(prefix='.description-job-', dir=output.parent) as directory:
         staging = Path(directory)
-        if descriptions and encode is None:
+        if pending and encode is None:
             progress.publish('loading_model')
             verify_model(cache)
             encoder = SentenceEncoder(cached_snapshot(cache), batch_size, threads)
             encode = encoder.encode_formatted
             progress.publish('encoding')
-        for offset in range(0, len(descriptions), batch_size):
-            batch = descriptions[offset:offset + batch_size]
+        for offset in range(0, len(pending), batch_size):
+            batch = pending[offset:offset + batch_size]
             documents = [TEMPLATE.format(title=item['title'].strip() or 'none',
                 description=item['description'].strip()) for item in batch]
             assert encode is not None
@@ -150,14 +171,30 @@ def run_embedding(source_manifest: Path, output: Path, cache: Path, batch_size: 
                 path = staging / item['path']
                 np.save(path, np.asarray([vector], dtype=np.float32), allow_pickle=False)
                 read_vectors(path, item['episode_id'], 1)
+                if data_root is not None:
+                    cached = data_root / DIRECTORY / path.name
+                    # A snapshot is the completion marker for this vector/text pair.
+                    cached.with_suffix('.json').unlink(missing_ok=True)
+                    replace_file(path, cached)
+                    metadata_path = staging / (item['episode_id'] + '.json')
+                    write_json(metadata_path, snapshot(item))
+                    replace_file(metadata_path, cached.with_suffix('.json'))
+                    item['path'] = str(cached.relative_to(data_root))
             progress.encoded(len(batch), duration)
         manifest: Manifest = {'version': 1, 'stage': 'description-embedding', 'show': show,
             'source_run': source, 'configuration': configuration(), 'episode_count': len(descriptions),
             'descriptions': descriptions}
+        if data_root is not None:
+            manifest['artifact_root'] = str(shared_metadata(manifest, output, data_root)['artifact_root'])
         write_json(staging / 'manifest.json', manifest)
         verify_output(staging, source_manifest)
         readable_tree(staging)
-        staging.rename(output)
+        if data_root is not None:
+            ensure_directory(output)
+            (staging / 'manifest.json').replace(output / 'manifest.json')
+        else:
+            staging.rename(output)
+    verify_output(output, source_manifest)
     progress.publish('completed')
     return manifest
 
@@ -167,11 +204,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--download-manifest', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
+    parser.add_argument('--data-root', type=Path)
     parser.add_argument('--model-cache', type=Path, default=default_model_cache())
     parser.add_argument('--batch-size', type=int, default=4)
     parser.add_argument('--threads', type=int, default=4)
     args = parser.parse_args()
-    manifest = run_embedding(args.download_manifest, args.output_dir, args.model_cache, args.batch_size, args.threads)
+    manifest = run_embedding(args.download_manifest, args.output_dir, args.model_cache, args.batch_size, args.threads, data_root=args.data_root)
     print(f"Published {manifest['episode_count']} description embeddings", flush=True)
 
 

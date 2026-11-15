@@ -7,6 +7,7 @@ import math
 import os
 from pathlib import Path
 import re
+import tempfile
 from typing import TypedDict, cast, NotRequired
 
 import psycopg2
@@ -16,11 +17,11 @@ from psycopg2.extensions import cursor as Cursor
 from radiofrance.jobs.description_embedding import Configuration as DescriptionConfiguration, verify_output as verify_descriptions
 from radiofrance.jobs.chunk import ChunkManifest, DownloadManifest, contained_file, validate_source, verify_output as verify_chunks
 from radiofrance.jobs.embedding import EmbeddingManifest, EmbeddingRow, read_vectors, verify_output as verify_embeddings
-from radiofrance.libs.storage import artifact_root
+from radiofrance.libs.storage import artifact_root, run_reference, ensure_directory, replace_file
 from radiofrance.libs.types import TranscriptSegment
 from radiofrance.libs.transcript_json import read_segments
 
-from radiofrance.libs.catalogue import CatalogueRow, read_rows
+from radiofrance.libs.catalogue import CatalogueRow, EpisodeFiles, read_episode_rows
 
 from importlib.resources import files
 
@@ -32,7 +33,7 @@ class Artifact(TypedDict):
 
 
 class CatalogueManifest(DownloadManifest):
-    episodes: Artifact
+    episodes: EpisodeFiles
 
 
 class Episode(TypedDict):
@@ -97,7 +98,7 @@ def prepare(embedding_manifest: Path, chunk_root: Path, download_root: Path,
         if artifact_root(embedding_manifest.parent) != embedding_manifest.parent else embedding_manifest.parent.name)
     embeddings = verify_embeddings(embedding_manifest.parent)
     chunk_path = source_run(chunk_root, embeddings['source_run'])
-    chunk_run = chunk_path.parent.name
+    chunk_run = run_reference(chunk_path.parent)
     chunks = verify_chunks(chunk_path.parent)
     verify_embeddings(embedding_manifest.parent, chunk_path)
     download_path = source_run(download_root, chunks['source_run'])
@@ -105,7 +106,7 @@ def prepare(embedding_manifest: Path, chunk_root: Path, download_root: Path,
     download = cast(CatalogueManifest, validate_source(download_path))
     if chunks['show'] != download['show']:
         raise ValueError('Chunk/download lineage mismatch')
-    catalogue = read_rows(contained_file(artifact_root(download_path.parent), download['episodes']['path']), download['show'])
+    catalogue = read_episode_rows(download_path.parent, download['show'])
     ids = {row['id'] for row in catalogue}
     for identity in ids:
         if not re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_(0|[1-9][0-9]*)', identity):
@@ -149,7 +150,7 @@ def prepare(embedding_manifest: Path, chunk_root: Path, download_root: Path,
         result['description_configuration'] = descriptions['configuration']
         result['descriptions'] = [{'external_id': item['episode_id'], 'title': item['title'],
             'description': item['description'], 'embedding': read_vectors(
-                contained_file(description_manifest.parent, item['path']), item['episode_id'], 1)[0]['embedding']}
+                contained_file(artifact_root(description_manifest.parent), item['path']), item['episode_id'], 1)[0]['embedding']}
             for item in descriptions['descriptions']]
     return result
 
@@ -365,14 +366,26 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--embedding-manifest', type=Path, required=True)
     parser.add_argument('--description-manifest', help='Description embedding manifest from the same download run')
-    parser.add_argument('--chunk-root', type=Path, default=Path('data/chunks/segment-characters-v1-1000-300/runs'))
+    parser.add_argument('--chunk-root', type=Path, default=Path('data'))
     parser.add_argument('--download-root', type=Path, default=Path('data'))
+    parser.add_argument('--result-file', type=Path, help='Write the completed load result as an atomic JSON record')
     parser.add_argument('--verify-only', action='store_true', help='Read-only verification of an already committed import')
     args = parser.parse_args()
     dsn = os.environ.get('RF_DATABASE_DSN', '')
     prepared = prepare(args.embedding_manifest, args.chunk_root, args.download_root, Path(args.description_manifest) if args.description_manifest else None)
     operation = verify_database if args.verify_only else load
-    print(json.dumps(operation(prepared, dsn)))
+    result = operation(prepared, dsn)
+    if args.result_file is not None:
+        ensure_directory(args.result_file.parent)
+        with tempfile.NamedTemporaryFile(mode='w', dir=args.result_file.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            try:
+                json.dump(result, stream)
+                stream.flush()
+                replace_file(temporary, args.result_file)
+            finally:
+                temporary.unlink(missing_ok=True)
+    print(json.dumps(result))
 
 
 if __name__ == '__main__':

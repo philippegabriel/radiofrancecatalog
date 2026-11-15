@@ -216,6 +216,19 @@ class DownloadJobTests(unittest.TestCase):
             fetch.assert_not_called()
             self.assertFalse(output.exists())
 
+    def test_shared_metadata_is_selected_by_manifest_and_not_duplicated_in_run(self) -> None:
+        """Store episode JSON in the shared corpus and retain only references in a run."""
+        from radiofrance.libs.catalogue import read_episode_rows
+        with tempfile.TemporaryDirectory() as temporary:
+            data = Path(temporary) / 'data'
+            data.mkdir()
+            output = data / 'runs/first/affaires-sensibles/download'
+            with patch.object(job, 'fetch_all', return_value=iter([episode('new_5', 200)])), patch.object(job, 'fetch_transcript', return_value={'transcript': []}):
+                manifest = job.run_download('affaires-sensibles', output, 'test', 0, data_root=data)
+            self.assertEqual(manifest['episodes'].get('paths'), ['episodes/new_5.json'])
+            self.assertEqual([row['id'] for row in read_episode_rows(output, 'affaires-sensibles')], ['new_5'])
+            self.assertEqual([path.name for path in output.iterdir()], ['manifest.json'])
+
     def test_metadata_rejects_duplicates_and_invalid_fields(self) -> None:
         """Reject malformed deltas before requesting any transcripts."""
         with tempfile.TemporaryDirectory() as temporary:

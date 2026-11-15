@@ -4,12 +4,10 @@ import json
 from pathlib import Path
 from typing import TypedDict, cast, NotRequired
 
-from radiofrance.jobs.description_embedding import DIRECTORY as DESCRIPTION_DIRECTORY
 from radiofrance.jobs.chunk import ChunkManifest
 from radiofrance.jobs.download import DownloadManifest
 from radiofrance.libs.progress import EmbeddingProgress
 from radiofrance.libs.runs import run_folder
-from radiofrance.libs.storage import CHUNK_DIRECTORY, EMBEDDING_DIRECTORY
 
 
 class ShowMetrics(TypedDict):
@@ -24,19 +22,19 @@ def show_metrics(root: Path, run_id: str, show: str) -> ShowMetrics:
     """Read published stage records; absent metrics remain unknown rather than zero."""
     folder = run_folder(run_id)
     result: ShowMetrics = {'episodes': None, 'transcripts': None, 'chunks': None, 'embeddings': None}
-    download = root / 'runs' / folder / 'download' / show / 'manifest.json'
+    download = root / 'runs' / folder / show / 'download' / 'manifest.json'
     if download.is_file():
         source = cast(DownloadManifest, json.loads(download.read_text()))
         result['episodes'] = source['new_episode_count']
         result['transcripts'] = len(source['transcripts'])
-    chunks = root / CHUNK_DIRECTORY / 'runs' / f'{folder}--{show}' / 'manifest.json'
+    chunks = root / 'runs' / folder / show / 'chunk' / 'manifest.json'
     if chunks.is_file():
         chunk = cast(ChunkManifest, json.loads(chunks.read_text()))
         result['chunks'] = chunk['chunk_count']
-    progress = root / EMBEDDING_DIRECTORY / 'runs' / f'{folder}--{show}.progress.json'
+    progress = root / 'runs' / folder / show / 'embedding' / 'progress.json'
     if progress.is_file():
         result['embeddings'] = cast(EmbeddingProgress, json.loads(progress.read_text()))
-    descriptions = root / DESCRIPTION_DIRECTORY / f'{folder}--{show}.progress.json'
+    descriptions = root / 'runs' / folder / show / 'description-embedding' / 'progress.json'
     result['description_embeddings'] = (cast(EmbeddingProgress, json.loads(descriptions.read_text()))
         if descriptions.is_file() else None)
     return result
@@ -61,7 +59,7 @@ def describe_metrics(show: str, metrics: ShowMetrics) -> str:
             text += f"; encoding {progress['encoding_seconds']:.1f}s, job elapsed {progress['elapsed_seconds']:.1f}s"
     descriptions = metrics.get('description_embeddings')
     if descriptions is not None:
-        text += f"; descriptions {descriptions['phase']}: {descriptions['generated']}/{descriptions['total']} generated"
+        text += f"; descriptions {descriptions['phase']}: {descriptions['generated']}/{descriptions['total']} generated, {descriptions['cached']} cached"
         if descriptions['rate'] is not None:
             text += f"; descriptions {descriptions['rate']:.2f}/s (encoding only)"
         if descriptions['remaining_seconds'] is not None:
@@ -88,7 +86,7 @@ def run_totals(shows: dict[str, ShowMetrics]) -> RunTotals:
     generated = sum(item['generated'] for item in progress if item is not None) if all(item is not None for item in progress) else None
     cached = sum(item['cached'] for item in progress if item is not None) if all(item is not None for item in progress) else None
     descriptions = [item.get('description_embeddings') for item in shows.values()]
-    description_count = (sum(item['generated'] for item in descriptions if item is not None)
+    description_count = (sum(item['generated'] + item['cached'] for item in descriptions if item is not None)
         if all(item is not None for item in descriptions) else None)
     return {'description_embeddings': description_count, 'episodes': sum(value for value in episodes if value is not None) if None not in episodes else None,
         'transcripts': sum(value for value in transcripts if value is not None) if None not in transcripts else None,

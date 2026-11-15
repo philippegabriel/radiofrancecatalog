@@ -6,6 +6,8 @@ import tempfile
 import time
 from typing import TypedDict
 
+from radiofrance.libs.storage import ensure_directory
+
 
 class EmbeddingProgress(TypedDict):
     phase: str
@@ -22,8 +24,9 @@ class EmbeddingProgress(TypedDict):
 class EmbeddingReporter:
     """Publish model-loading, first-ten, hundred-vector and completion updates."""
 
-    def __init__(self, output: Path, total: int, cached: int) -> None:
-        self.path = output.parent / f'{output.name}.progress.json'
+    def __init__(self, output: Path, total: int, cached: int, *, shared: bool = False) -> None:
+        self.path = (output / 'progress.json' if shared
+            else output.parent / f'{output.name}.progress.json')
         self.total = total
         self.cached = cached
         self.generated = 0
@@ -40,7 +43,7 @@ class EmbeddingReporter:
             'generated': self.generated, 'encoding_seconds': self.encoding_seconds,
             'elapsed_seconds': time.monotonic() - self.started, 'rate': rate,
             'remaining_seconds': remaining / rate if rate else None, 'provisional': self.generated < 100}
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_directory(self.path.parent)
         with tempfile.NamedTemporaryFile(mode='w', dir=self.path.parent, delete=False) as stream:
             temporary = Path(stream.name)
             try:

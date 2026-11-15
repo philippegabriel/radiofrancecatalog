@@ -108,8 +108,8 @@ and vectors in a single transaction. It does not run models or initialize tables
 ```bash
 sudo docker compose build database-loader
 sudo docker compose run --rm database-loader \
-  --embedding-manifest /data/embeddings/embeddinggemma2-fp32-256/914f7f89142e33e77833254d9c9b90c3cef7303b/segment-characters-v1-1000-300/runs/RUN/manifest.json \
-  --chunk-root /data/chunks/segment-characters-v1-1000-300/runs --download-root /data
+  --embedding-manifest /data/runs/RUN/SHOW/embedding/manifest.json \
+  --chunk-root /data --download-root /data
 ```
 
 Replace `RUN` with the selected UTC timestamp; see [storage](../docs/storage.md).

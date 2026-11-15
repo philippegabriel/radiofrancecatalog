@@ -1,62 +1,64 @@
 # Pipeline storage
 
-Trigger **radiofrance_pipeline** in Airflow and select registered shows, all enabled
-shows, or new programme URLs for the complete pipeline. The `embedding_run` prompt belongs to the standalone database recovery
-DAG, not the parent pipeline.
-
 ```text
 data/
-  runs/<UTC timestamp>/download/<show>/
-    episodes.json
-    manifest.json
+  episodes/<episode-id>.json
   transcripts/<episode-id>.json
-  chunks/segment-characters-v1-1000-300/
-    <episode-id>.csv
-    runs/<UTC timestamp>--<show>/manifest.json
-  embeddings/embeddinggemma2-fp32-256/<model revision>/segment-characters-v1-1000-300/
-    <episode-id>.npy
-    runs/<UTC timestamp>--<show>/manifest.json
-  catalogue/
-    index.html
-    <show>.html
-    manifest.json
+  chunks/<chunking-strategy>/<episode-id>.csv
+  embeddings/
+    transcripts/<model-and-revision>/256/<chunking-strategy>/<episode-id>.npy
+    descriptions/<model-and-revision>/256/<episode-id>.npy
+    descriptions/<model-and-revision>/256/<episode-id>.json
+  runs/<UTC timestamp>/<show>/
+    download/manifest.json
+    chunk/manifest.json
+    embedding/{manifest.json,progress.json}
+    description-embedding/{manifest.json,progress.json}
+    database/result.json
+  catalogue/                 # HTML, CSS and logo
+  database-backups/
 ```
 
-Names such as `2026-11-03_14-30-00-123456Z` come from the parent's UTC trigger
-instant. Microseconds distinguish nearby runs. Child stages use that same instant;
-Airflow's internal identifiers remain separate. Chunk and embedding `runs`
-subdirectories hold small completion manifests only, never duplicate corpus files.
+Model directories include precision and the pinned revision, for example
+`embeddinggemma2-fp32-914f7f89142e33e77833254d9c9b90c3cef7303b`.
+The current chunk strategy is `segment-characters-v1-1000-300`.
+Episode JSON contains a single-element metadata list, including title and description.
+It can be updated; raw transcripts are treated as immutable.
 
-Download metadata is incremental. Its manifest references shared transcripts.
-Each subsequent manifest lists exactly the selected episode files, counts and
-configuration and points to its source manifest. Shared artifact paths are relative
-to `data`; the manifest records its relative ancestor anchor. Paths are checked for
-traversal and escaping symlinks. The loader follows these explicit references,
-not a directory scan or the newest run.
+Manifests select exact episode IDs and shared paths; directory scans never select
+pipeline work. Paths are relative to data, with a relative ancestor anchor stored
+in the manifest. The loader checks containment, membership and source lineage.
+Run timestamps use UTC and include microseconds. Runs contain records, not corpus copies.
+A manifest is the completion marker; progress.json alone never indicates success.
+Database import completion remains transactional and is recorded in PostgreSQL.
+The loader writes database/result.json after a successful commit; this file is
+feedback, while PostgreSQL remains the authority for committed work.
 
-Transcripts accumulate by episode ID and are reused without another HTTP request.
-Chunks accumulate by strategy; equal existing files are reused and differing
-content is rejected. Vectors accumulate by pinned model revision and strategy;
-existing NPY shape, dtype, count and normalization are checked before reuse.
-Reusing a valid matrix does not load or run the model. There are no SHA256 checks.
-Already published corpus files can survive a later failure. A new run can reuse
-them; only the final database transaction advances the download cutoff.
+Each completed transcript, chunk CSV and transcript NPY is published to the shared
+cache immediately. Incomplete files stay temporary; publication uses an atomic
+filesystem operation on the same filesystem. If later work fails, completed cache
+entries remain reusable. No SHA256 calculations are needed. NPY shape, FP32 dtype,
+counts and normalization are checked before reuse.
 
-The HTML catalogue covers all committed episodes, including those without a
-transcript. It refreshes the same pages, newest episodes first. Each page is
-replaced atomically; the manifest is written last. A failure during publication
-may leave mixed pages until export is rerun. Nothing is automatically published
-to the web. Open `data/catalogue/index.html` directly.
+Description vectors are also shared. Their adjacent JSON records the exact title,
+description and encoder configuration. Equal snapshots reuse the vector without
+loading the model; changed text regenerates it. The JSON is published last as the
+pair's completion marker. The description stage is serialized by Airflow: do not
+run independent writers to the same description cache concurrently. Old manifests
+whose source text has changed fail verification rather than loading a mismatched vector.
 
-## Upgrade an existing setup
+## Applying the layout change
 
-Run these commands from the project root as the project owner (sudo only for Docker):
+Existing files on this workstation were moved with a one-off migration; original
+manifests and the relocation journal are retained in
+`data/archive/storage-layout-20261114.tar.gz` for recovery. Older
+CSV exports and completed one-off job records are retained under data/archive.
+The migration does not change the database or rerun inference.
+
+Rebuild all job images and Airflow before triggering another run:
 
 ```bash
-mkdir -p data/runs data/transcripts \
-  data/chunks/segment-characters-v1-1000-300/runs \
-  data/embeddings/embeddinggemma2-fp32-256/914f7f89142e33e77833254d9c9b90c3cef7303b/segment-characters-v1-1000-300/runs \
-  data/catalogue
+bash airflow/configure
 sudo docker build -f download/Dockerfile -t radiofrance-download:dev .
 sudo docker build -f chunking/Dockerfile -t radiofrance-chunk:dev .
 sudo docker build -f embedding/Dockerfile -t radiofrance-embedding:dev .
@@ -64,27 +66,14 @@ sudo docker compose build airflow database-loader
 sudo docker compose up -d --wait --wait-timeout 300 airflow
 ```
 
-No database migration or reset is required. Existing artifacts are not moved or
-deleted automatically. Unnamespaced older chunk/vector exports remain where they
-are; new pipeline writes use the configuration directories above. Existing
-`data/transcripts` files can be reused directly. Completed old self-contained
-manifests remain readable by the job functions, but the current Airflow forms and
-mounts select the new layout. Old stage directories are no longer pipeline outputs.
-
-Enable the parent, its single-show coordinator and five stage DAGs. Use the
-parent selection form described below. For recovery only, trigger `radiofrance_chunk` with
-`download_run: <timestamp>/download/<show>`, `radiofrance_embedding` with
-`chunk_run: <timestamp>--<show>`, or `radiofrance_database` with `embedding_run: <timestamp>--<show>`.
-Standalone download/chunk/embedding runs get their own trigger timestamps; manifests
-preserve the explicit source reference when source and output timestamps differ.
-
-To refresh only HTML, with no downloading or inference:
-
-```bash
-sudo docker compose run --rm --user "$(id -u):$(id -g)" \
-  --volume "$PWD/data:/data" --entrypoint python database-loader \
-  -m radiofrance.jobs.catalogue --output-dir /data/catalogue --replace
-```
+For standalone recovery supply `download_run: <timestamp>/<show>/download`,
+`chunk_run: <timestamp>/<show>/chunk`, or
+`embedding_run: <timestamp>/<show>/embedding`. Description recovery uses
+`description_run: <timestamp>/<show>/description-embedding`.
+All are relative to data/runs; the parent supplies them automatically.
+No database migration or reset is needed. Historical database import records and
+Airflow XCom retain their original path strings; they are audit history. For new
+recovery runs, select the relocated manifest path explicitly.
 
 ## Select shows or register new ones
 
@@ -122,9 +111,8 @@ manual coordinator runs. Parent mapped tasks can all be deferred, but this does
 not allow multiple shows to process at once. Queued shows may run in scheduler
 order; do not rely on the form's order.
 
-Per-show download records live at `data/runs/<timestamp>/download/<show>/`.
-Chunk and embedding completion folders use `runs/<timestamp>--<show>/` to avoid
-collisions between shows. Shared per-episode corpus files retain their paths.
+Per-show download records live at `data/runs/<timestamp>/<show>/download/`.
+Every stage writes its records under the same timestamp/show directory. Shared episode files are kept separately from those records.
 The HTML catalogue is refreshed once after all selected shows succeed. If one
 show fails, already committed shows remain committed and other queued shows can
 still finish; the parent reports failure and does not refresh HTML. A new run
@@ -189,8 +177,7 @@ cached vectors. Short jobs report their rate at completion; all-cached/empty job
 have no measured rate. Final metrics include encoding and total job elapsed time.
 ETA is approximate and may vary with chunk length or other CPU activity.
 
-The embedding worker atomically replaces `<run>.progress.json` beside its run
-completion directory. This small sidecar persists alongside the manifest and is
+The embedding worker atomically replaces `progress.json` inside its stage run directory. This small sidecar persists alongside the manifest and is
 not itself proof of successful processing. The parent monitor's final XCom contains
 per-show metrics, combined totals and terminal processing states. Failed/skipped stages are logged
 explicitly and still fail/block the normal pipeline as appropriate. Cancellation
@@ -246,49 +233,27 @@ The download CLI supports the same optional `--from-date` and `--to-date` flags.
 
 ## Description embeddings in the normal pipeline
 
-Each show follows the same stage-DAG pattern:
+Each show runs download → chunk → transcript embedding → description embedding →
+database. The two embedding stages run sequentially to keep memory bounded. Both
+read only the selected artifacts, with no API or database credentials. Description
+prompts are `title: <title> | text: <description>`; blank descriptions are skipped.
+The database loader validates both vector kinds and the exact metadata snapshots
+before committing metadata, transcripts, chunks, vectors and import completion in
+one transaction. Empty runs publish valid empty manifests without model inference.
 
-```text
-download → chunk → transcript embeddings → description embeddings → database
-```
+The normal pipeline handles only the selected download. Independent backfill tools
+remain available for unrelated historical gaps. Standalone loader recovery can
+omit description_run for a transcript-only import; the parent always supplies both.
 
-`radiofrance_description_embedding` reads the selected download metadata directly,
-with no PostgreSQL access or credentials. It encodes each nonblank description as
-`title: <title> | text: <description>` using the same normalized 256D FP32 model
-as description search. Blank descriptions are skipped; empty runs publish a valid
-empty manifest without loading the model. Both encoding stages run sequentially
-to keep CPU and memory use bounded.
+## Pipeline duration
 
-The database stage validates both embedding manifests against the same download,
-including exact source title/description snapshots. It inserts episode metadata,
-transcripts, chunks, both kinds of vectors and import completion in one transaction.
-A failure rolls back that whole import; a new pipeline run reselects uncommitted
-episodes and reuses available transcripts/transcript vectors. Description vectors
-are run-scoped artifacts and are regenerated on a fresh run. An identical import
-verifies stored description vectors rather than duplicating them.
+Processing tasks, child-DAG waits, the show coordinator and the unified monitor
+have no elapsed-time deadline. Large backfills can run until completion or manual
+cancellation. The monitor continues to reschedule every ten seconds, releasing
+its worker slot between checks. The integration driver also waits for a terminal
+pipeline state without an application deadline. GitHub runner platform limits
+still apply even though custom workflow job limits have been removed.
 
-Description artifacts live under
-`data/embeddings/episode-descriptions/<revision>/runs/<timestamp>--<show>/`.
-Each directory contains per-episode NPY files and a completion manifest recording
-external episode IDs, model configuration, source snapshots and the download run.
-A sibling progress sidecar feeds `radiofrance_pipeline.monitor_run`, which reports
-transcript and description counts separately.
-
-Existing database-only backfill commands remain independent. The normal pipeline
-processes only episodes in its download selection; it does not scan PostgreSQL for
-unrelated missing descriptions. Existing gaps need the explicit backfill workflow.
-For standalone loader recovery, description_run may be left blank for a
-transcript-only import. The parent always supplies both manifests.
-
-No database migration or model download is required. After active runs finish:
-
-```bash
-sudo docker build -f embedding/Dockerfile -t radiofrance-embedding:dev .
-sudo docker compose build airflow database-loader
-sudo docker compose up -d --wait --wait-timeout 300 airflow
-sudo docker compose exec airflow airflow dags unpause radiofrance_description_embedding
-```
-
-Trigger the parent as usual. It now waits for all five stage DAGs; enable the new
-description DAG before starting. Pipeline integration validates description
-coverage, dimensions, normalization and metadata snapshots as well as transcripts.
+Network/database connection limits, health-check/startup limits, bounded registry
+queries and test timeouts remain in place. These detect unresponsive dependencies
+and do not cap embedding inference or overall pipeline duration.

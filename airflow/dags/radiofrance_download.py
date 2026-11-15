@@ -1,6 +1,5 @@
 """Run the existing download image from Airflow, then verify its artifacts."""
 
-from datetime import timedelta
 from collections.abc import Mapping
 import re
 import json
@@ -11,7 +10,7 @@ from typing import TypedDict, cast
 from radiofrance.libs.date_range import date_range
 from radiofrance.libs.runs import run_folder
 from radiofrance.libs.storage import artifact_root
-from radiofrance.libs.catalogue import SHOWS, read_rows
+from radiofrance.libs.catalogue import SHOWS, read_episode_rows
 from radiofrance.libs.programmes import show_url
 from radiofrance.jobs.chunk import validate_source
 
@@ -53,11 +52,11 @@ def verify_artifacts(directory: Path, expected_show: str = SHOW) -> None:
     if manifest['show'] != expected_show:
         raise ValueError('Unexpected show in download manifest')
     root = artifact_root(directory)
-    for artifact in [manifest['episodes'], *manifest['transcripts']]:
+    for artifact in manifest['transcripts']:
         path = (root / artifact['path']).resolve()
         if not path.is_relative_to(root.resolve()) or not path.is_file():
             raise ValueError('Artifact must be a file inside its run directory')
-    episodes = read_rows(root / manifest['episodes']['path'], expected_show)
+    episodes = read_episode_rows(directory, expected_show)
     if (len(episodes) != source['new_episode_count'] or
             {row['id'] for row in episodes} != {item['episode_id'] for item in source['transcripts']}):
         raise ValueError('Episode metadata does not match the transcript manifest')
@@ -83,7 +82,7 @@ with date bounds. Explicit date ranges bypass the watermark and skip all committ
 IDs; no dates retains incremental behavior. Trigger without parameters for defaults.
 
 ## Outputs and recovery
-Write episodes.json and manifest.json under data/runs/<UTC timestamp>/download/<show>.
+Write individual metadata files under data/episodes/<episode-id>.json and only manifest.json under data/runs/<UTC timestamp>/<show>/download.
 Raw transcripts accumulate under data/transcripts/<episode-id>.json and are referenced
 explicitly by the manifest. No database writes occur. A failed downstream stage leaves
 the cutoff unchanged; another pipeline run reuses existing transcripts. Shared files
@@ -119,7 +118,7 @@ Existing download records are never overwritten. Automatic retries are disabled.
         url = options.get('show_url') or f'https://www.radiofrance.fr/{SHOWS.get(show, "")}/podcasts/{show}'
         if show_url(url)['slug'] != show:
             raise ValueError('Programme URL does not match selected show')
-        folder = options.get('output_folder') or f'{run_folder(run_id)}/download/{show}'
+        folder = options.get('output_folder') or f'{run_folder(run_id)}/{show}/download'
         if not re.fullmatch(r'[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*', folder):
             raise ValueError('Invalid download output folder')
         return folder
@@ -161,7 +160,6 @@ Existing download records are never overwritten. Automatic retries are disabled.
         network_mode=NETWORK,
         mem_limit='1g',
         auto_remove='force',
-        execution_timeout=timedelta(hours=1),
         do_xcom_push=False,
         doc_md='Run the download image on the Compose network. Read the committed application database watermark in a read-only transaction, then select the incremental delta or explicit Paris date range, skipping committed IDs before transcripts, via the Radio France APIs and publish JSON metadata/transcripts. The API-key file is mounted read-only; the database password is private and never placed in XCom. No database writes occur; nonzero exit fails the task.',
     )

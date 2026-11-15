@@ -9,11 +9,11 @@ import tempfile
 import time
 from typing import TypedDict, NotRequired
 from radiofrance.libs.date_range import DateRange, date_range
-from radiofrance.libs.storage import publish, shared_metadata
+from radiofrance.libs.storage import ensure_directory, publish, shared_metadata, replace_file
 from radiofrance.libs.programmes import show_url as validate_show_url
 from radiofrance.libs.episode_selection import read_selection
 
-from radiofrance.libs.catalogue import SHOWS, CatalogueRow, read_rows
+from radiofrance.libs.catalogue import SHOWS, CatalogueRow, EpisodeFiles, read_rows
 from radiofrance.libs.download_state import read_download_state
 from radiofrance.fetch_transcripts import aod_uuid, fetch_transcript, write_transcript_json
 from radiofrance.fetch_episodes import fetch_all
@@ -35,7 +35,7 @@ class DownloadManifest(TypedDict):
     cutoff_timestamp: int
     new_episode_count: int
     database_episode_count: int
-    episodes: Artifact
+    episodes: EpisodeFiles
     transcripts: list[TranscriptArtifact]
 
 
@@ -55,14 +55,15 @@ def run_download(show: str, output: Path, api_key: str,
     episodes sharing that second are retained. An empty show starts from zero.
     Fixed-selection mode requires an empty show and enforces exact fixture IDs and
     transcript counts. Database failures never fall back to a full download.
-    Publish episodes.json, raw transcripts and a version-2 manifest atomically;
+    Publish raw transcripts and a version-2 completion manifest atomically;
     failure leaves the database watermark and final output unchanged. No database
     writes, catalogue CSVs, S3 publication or Airflow asset events occur here.
     An explicit from_date/to_date selects inclusive Paris calendar days, bypasses
     the latest watermark and skips all committed IDs, allowing older backfills.
     Bounds are applied before transcript requests and recorded in the manifest.
     With data_root, reuse transcripts by episode ID and publish newly acquired
-    JSON there. Only metadata and completion records are stored in output. Shared
+    JSON there. Episode metadata is stored under episodes/<id>.json; only the
+    completion manifest is stored in output. Shared
     transcripts can survive failures and be reused before a database commit.
     """
     bounds = date_range(from_date, to_date)
@@ -96,7 +97,7 @@ def run_download(show: str, output: Path, api_key: str,
         query_cutoff = bounds['start_timestamp'] - 1 if bounds['start_timestamp'] is not None else 0
         print(f"Date range (Europe/Paris): {bounds['from_date'] or 'unbounded'} to {bounds['to_date'] or 'unbounded'}", flush=True)
     print(f"Database cutoff for {show}: {cutoff}; {state['episode_count']} committed episodes", flush=True)
-    output.parent.mkdir(parents=True, exist_ok=True)
+    ensure_directory(output.parent)
     with tempfile.TemporaryDirectory(prefix='.download-job-', dir=output.parent) as staging:
         directory = Path(staging)
         rows = (fetch_all(api_key, programme['url'], since_ts=query_cutoff, until_ts=bounds['end_timestamp'])
@@ -161,11 +162,14 @@ def run_download(show: str, output: Path, api_key: str,
                 target = expected[episode_id]
                 if len(transcript['transcript']) != target['segment_count']:
                     raise ValueError(f'Selected transcript changed: {episode_id}')
+            if data_root is not None and cached is not None:
+                if not cached.is_file():
+                    publish(path, cached)
             transcripts.append({**artifact(path, directory), 'episode_id': episode_id})
         manifest: DownloadManifest = {
             'version': 2, 'show': show, 'cutoff_timestamp': cutoff,
             'new_episode_count': len(new_rows), 'database_episode_count': state['episode_count'],
-            'episodes': artifact(episodes, directory),
+            'episodes': {'path': 'episodes.json'},
             'transcripts': transcripts,
         }
         if ranged:
@@ -177,7 +181,15 @@ def run_download(show: str, output: Path, api_key: str,
                 if not target.is_file():
                     publish(local, target)
                 item['path'] = str(target.relative_to(data_root))
-            manifest['episodes']['path'] = str((output / 'episodes.json').relative_to(data_root))
+            paths: list[str] = []
+            for row in new_rows:
+                local = directory / f"{row['id']}.json"
+                local.write_text(json.dumps([row], ensure_ascii=False, indent=2) + '\n')
+                target = data_root / 'episodes' / local.name
+                replace_file(local, target)
+                paths.append(str(target.relative_to(data_root)))
+            manifest['episodes'] = {'paths': paths}
+            episodes.unlink()
             manifest['artifact_root'] = str(shared_metadata(manifest, output, data_root)['artifact_root'])
             import shutil
             shutil.rmtree(transcript_dir)
