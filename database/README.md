@@ -209,3 +209,19 @@ slug, canonical URL, enabled) and seeds the six original shows before episodes i
 The pipeline trigger form can register new URLs and select one, several or all
 enabled shows. See [setup and usage](../docs/storage.md#select-shows-or-register-new-ones).
 Episode tables and existing cutoffs are preserved.
+
+## Database inventory
+
+Query `SELECT * FROM public.inventory ORDER BY table_name;` for exact row counts
+of all user tables in the Radio France database. Table discovery happens on every
+query, so newly created tables are included automatically. System tables, views,
+foreign tables and temporary tables are excluded; partitions are counted through
+their parent. Exact counts can take time on large tables.
+
+The view uses the caller's permissions and requires SELECT access to the counted
+tables. Its helper function uses one statement snapshot for consistent counts.
+`make inventory` also retains the separate per-programme episode summary.
+
+New database volumes install this through `database/init/40-inventory.sql`.
+For an existing database, apply that file with psql as the application owner
+(`radiofrance`) or an administrator. It is repeatable and does not change data.

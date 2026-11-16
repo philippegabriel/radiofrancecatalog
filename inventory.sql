@@ -1,11 +1,12 @@
-SELECT 'episodes' AS table_name, count(*) AS record_count FROM episodes
-UNION ALL
-SELECT 'semantic_chunk', count(*) FROM semantic_chunk
-UNION ALL
-SELECT 'transcript_segment', count(*) FROM transcript_segment
-ORDER BY table_name;
+-- Convenience report; the reusable table inventory lives in public.inventory.
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
+
+-- Tables are discovered dynamically by the view's helper function.
+SELECT table_name, record_count FROM public.inventory ORDER BY table_name;
 
 SELECT show, count(*) AS record_count
 FROM episodes_external
 GROUP BY show
 ORDER BY show;
+
+COMMIT;
