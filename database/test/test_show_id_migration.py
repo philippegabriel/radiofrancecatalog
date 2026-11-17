@@ -81,8 +81,14 @@ class ShowIdMigrationTests(unittest.TestCase):
             self.assertTrue(cursor.fetchone()[0])
             cursor.execute('SELECT (SELECT count(*) FROM transcript_segment), (SELECT count(*) FROM chunk_embedding)')
             self.assertEqual(cursor.fetchone(), (1, 1))
-            cursor.execute((ROOT / 'inventory.sql').read_text())
-            self.assertEqual(cursor.fetchall(), [('mecaniques-du-journalisme', 1)])
+        # The report owns its read-only transaction, so run it on a fresh psql session.
+        psql = str(Path(os.environ['PG_BINDIR']) / 'psql') if 'PG_BINDIR' in os.environ else shutil.which('psql')
+        assert psql is not None
+        report = subprocess.run([psql, '-X', '--dbname', self.dsn, '-v', 'ON_ERROR_STOP=1',
+            '-qAt', '-f', str(ROOT / 'inventory.sql')], text=True, capture_output=True)
+        self.assertEqual(report.returncode, 0, report.stderr)
+        self.assertIn('public.episodes|1', report.stdout.splitlines())
+        self.assertEqual(report.stdout.splitlines()[-1], 'mecaniques-du-journalisme|1')
         with self.assertRaises(psycopg2.IntegrityError):
             with closing(psycopg2.connect(self.dsn)) as connection, connection:
                 with connection.cursor() as cursor:
